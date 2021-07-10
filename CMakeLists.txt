@@ -3,7 +3,7 @@ project(Seq)
 include(ExternalProject)
 
 set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility-inlines-hidden -pedantic -Wall -Wno-return-type-c-linkage")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility-inlines-hidden -pedantic -mavx -Wall -Wno-return-type-c-linkage")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -fno-limit-debug-info")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 include_directories(.)
@@ -140,6 +140,8 @@ set(SEQ_HPPFILES
         compiler/seq/pipeline.h
         compiler/seq/revcomp.h
         compiler/seq/seq.h
+        compiler/sequre/arithmetics.h
+        compiler/sequre/sequre.h
         compiler/sir/analyze/analysis.h
         compiler/sir/analyze/dataflow/cfg.h
         compiler/sir/analyze/dataflow/dominator.h
@@ -213,6 +215,8 @@ set(SEQ_CPPFILES
         compiler/seq/pipeline.cpp
         compiler/seq/revcomp.cpp
         compiler/seq/seq.cpp
+        compiler/sequre/arithmetics.cpp
+        compiler/sequre/sequre.cpp
         compiler/sir/attribute.cpp
         compiler/sir/analyze/analysis.cpp
         compiler/sir/analyze/dataflow/cfg.cpp

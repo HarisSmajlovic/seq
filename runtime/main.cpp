@@ -1,6 +1,7 @@
 #include "dsl/plugins.h"
 #include "parser/parser.h"
 #include "seq/seq.h"
+#include "sequre/sequre.h"
 #include "sir/llvm/llvisitor.h"
 #include "sir/transform/manager.h"
 #include "sir/transform/pass.h"
@@ -122,6 +123,10 @@ ProcessResult processSource(const std::vector<const char *> &args) {
   // load Seq
   seq::Seq seqDSL;
   plm.load(&seqDSL);
+
+  // load Sequre
+  seq::Sequre sequreDSL;
+  plm.load(&sequreDSL);
 
   // load other plugins
   for (const auto &dsl : dsls) {
