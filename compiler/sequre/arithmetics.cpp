@@ -9,7 +9,7 @@ namespace seq {
 
 using namespace ir;
 
-const std::string secureContainerTypeName = "SecureContainer";
+const std::string secureContainerTypeName = "SharedTensor";
 
 /*
  * Binary expression tree
