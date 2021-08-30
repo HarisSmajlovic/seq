@@ -720,7 +720,7 @@ void ArithmeticsOptimizations::applyBeaverOptimizations(CallInstr *v) {
     isDiv     ? "secure_div"      :
     isPow     ? "secure_pow"      :
     "invalid_operation";
-  if (!isBeaverOptFunc(pf) && (isMul || isPow || isDiv || isSqrtInv))
+  if (!isBeaverOptFunc(pf) && (isMul || isPow || isSqrtInv))
     methodName += "_no_cache";
 
   if (isSqrtInv) {
