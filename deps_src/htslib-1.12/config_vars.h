@@ -1,0 +1,5 @@
+#define HTS_CC "clang"
+#define HTS_CPPFLAGS ""
+#define HTS_CFLAGS "-Wall -fPIC -fvisibility=hidden"
+#define HTS_LDFLAGS "-fvisibility=hidden "
+#define HTS_LIBS "-ldeflate -llzma -lbz2 -lz -lm  "

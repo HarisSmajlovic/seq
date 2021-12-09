@@ -1,0 +1,332 @@
+@tuple
+class DType[T]:
+    _value: T
+
+int8 = DType(i8(0))
+int32 = DType(i32(0))
+int64 = DType(0)
+uint8 = DType(u8(0))
+uint32 = DType(u32(0))
+uint64 = DType(u64(0))
+float64 = DType(0.0)
+
+@tuple
+class NDArray[S,D]:
+    _shape: S
+    _data: Ptr[D]
+
+    def _count(shape):
+        total = 1
+        for i in range(staticlen(shape)):
+            total *= shape[i]
+        return total
+
+    def _extract_shape(t):
+        if hasattr(type(t), "__getitem__"):
+            rest = NDArray._extract_shape(t[0])
+            return (len(t), *rest)
+        else:
+            return ()
+
+    def _validate_shape(t, shape):
+        def error():
+            raise ValueError('array dimensions mismatch')
+
+        if staticlen(shape) == 0:
+            return
+        else:
+            if not hasattr(type(t), "__getitem__"):
+                error()
+            else:
+                if len(t) != shape[0]:
+                    error()
+                for s in t:
+                    NDArray._validate_shape(s, shape[1:])
+
+    def _inner_type(t):
+        if hasattr(type(t), "__getitem__"):
+            return NDArray._inner_type(t[0])
+        else:
+            return t
+
+    def _flatten(t, shape):
+        def helper(t, p, start = 0):
+            for s in t:
+                if hasattr(type(s), "__getitem__"):
+                    start = helper(s, p, start)
+                else:
+                    p[start] = s
+                    start += 1
+            return start
+
+        D = type(NDArray._inner_type(t))
+        p = Ptr[D](NDArray._count(shape))
+        helper(t, p)
+        return p
+
+    @property
+    def shape(self):
+        return self._shape
+    
+    @property
+    def T(self):
+        p = Ptr[D](self.size)
+        assert len(self.shape) == 2, "Transposing enabled only for 2D arrays at the moment."
+        m, n = self.shape
+        
+        count = 0
+        for j in range(n):
+            for i in range(m):
+                p[count] = self._data[i * n + j]
+                count += 1
+        
+        return NDArray[S,D]((n, m), p)
+
+    @property
+    def size(self):
+        return NDArray._count(self.shape)
+
+    def reshape(self, *shape):
+        reshaped = NDArray(shape, self._data)
+        a, b = self.size, reshaped.size
+        if a != b:
+            raise ValueError(f'cannot reshape array of size {a} into shape {shape}')
+        return reshaped
+
+    def __str__(self):
+        return f'<array shape=({"x".join(str(s) for s in self.shape)}), data=[{",".join(str(self._data[i]) for i in range(self.size))}]>'
+
+    def __len__(self):
+        return self.shape[0]
+
+    def __getitem__(self, idx: S):
+        factor = 1
+        offset = 0
+        d = len(idx)
+        i = d - 1
+        while i >= 0:
+            a, b = idx[i], self.shape[i]
+            a0 = a
+            if a < 0:
+                a += b
+            if a < 0 or a >= b:
+                raise IndexError(f'index {a0} is out of bounds for axis {i} with size {b}')
+            offset += factor * a
+            factor *= b
+            i -= 1
+        return self._data[offset]
+
+    def __getitem__(self, idx: int):
+        s = self.shape[0]
+        idx0 = idx
+        if idx < 0:
+            idx += s
+        if idx < 0 or idx >= s:
+            raise IndexError(f'index {idx0} is out of bounds for axis 0 with size {s}')
+        subsize = 1
+        for i in range(1,len(self.shape)):
+            subsize *= i
+        return NDArray(self.shape[1:], self._data + (subsize * idx))
+
+    def __add__(self, other: NDArray[S,D]):
+        p = Ptr[D](self.size)
+        for i in range(self.size):
+            p[i] = self._data[i] + other._data[i]
+        return NDArray[S,D](self.shape, p)
+
+    def __add__(self, other: D):
+        p = Ptr[D](self.size)
+        for i in range(self.size):
+            p[i] = self._data[i] + other
+        return NDArray[S,D](self.shape, p)
+    
+    def __sub__(self, other: NDArray[S,D]):
+        p = Ptr[D](self.size)
+        for i in range(self.size):
+            p[i] = self._data[i] - other._data[i]
+        return NDArray[S,D](self.shape, p)
+
+    def __sub__(self, other: D):
+        p = Ptr[D](self.size)
+        for i in range(self.size):
+            p[i] = self._data[i] - other
+        return NDArray[S,D](self.shape, p)
+
+    def __mul__(self, other: NDArray[S,D]):
+        p = Ptr[D](self.size)
+        for i in range(self.size):
+            p[i] = self._data[i] * other._data[i]
+        return NDArray[S,D](self.shape, p)
+    
+    def __pow__(self, pow: int):
+        p = Ptr[D](self.size)
+        for i in range(self.size):
+            p[i] = self._data[i] ** pow
+        return NDArray[S,D](self.shape, p)
+    
+    def matmul(self, other: NDArray[S,D]):
+        shape_a = self.shape
+        shape_b = other.shape
+        assert shape_a[1] == shape_b[0], f"Invalid matrix shapes: {shape_a} and {shape_b}"
+
+        size = shape_a[0] * shape_b[1]
+        p = Ptr[D](size)
+        b_t = other.T
+        
+        for i in range(size):
+            p[i] = 0
+            section_a = i // shape_a[0]
+            section_b = i % shape_b[1]
+            for j in range(shape_a[1]):
+                p[i] += self._data[section_a + j] * b_t._data[section_b + j]
+        
+        return NDArray[S,D]((shape_a[0], shape_b[1]), p)
+    
+    def dot(self, other: NDArray[S,D]) -> D:
+        assert self.size == other.size, "Mismatched matrix sizes"
+        s = D()
+        
+        for i in range(self.size):
+            s += self._data[i] * other._data[i]
+        
+        return s
+    
+    def __cofactor(self, p, q):
+        j = 0
+        n = self.shape[0]
+
+        temp = Ptr[D]((n - 1) * (n - 1))
+        for i in range((n - 1) * (n - 1)): temp[i] = D()
+    
+        for row in range(n):
+            section = row * n
+            for col in range(n):
+                if (row != p and col != q):
+                    temp[j] = self._data[section + col]
+                    j += 1
+
+        return NDArray((n - 1, n - 1), temp)
+
+    def determinant(self):
+        n = self.shape[0]
+        data = self._data
+        
+        if n == 2:
+            return data[0] * data[3] - data[1] * data[2]
+
+        determinant = D()
+        for c in range(n):
+            determinant += ((-1) ** c) * data[c] * self.__cofactor(0, c).determinant()
+        
+        return determinant
+
+    def inv(self):
+        m, n = self.shape
+        assert m == n, "Matrix inverse enabled only for squared matrices."
+        determinant = self.determinant()
+        assert determinant != 0, "Matrix is not invertible."
+        data = self._data
+
+        p = Ptr[D](self.size)
+
+        if n == 2:
+            p[0] = data[3] / determinant
+            p[1] = -1 * data[1] / determinant
+            p[2] = -1 * data[2] / determinant
+            p[3] = data[0] / determinant
+            return NDArray[S,D]((2, 2), p)
+        
+        i = 0
+        for r in range(n):
+            for c in range(n):
+                p[i] = (((-1)**(r + c)) * self.__cofactor(r, c).determinant())
+                i += 1
+        
+        p_t = Ptr[D](self.size)
+        
+        count = 0
+        for j in range(n):
+            for i in range(n):
+                p_t[count] = p[i * n + j]
+                count += 1
+        
+        for i in range(self.size): p_t[i] /= determinant
+
+        return NDArray[S,D](self.shape, p_t)
+
+
+class NumPy:
+    def array(contents, shape):
+        data = NDArray._flatten(contents, shape)
+        return NDArray(shape, data)
+
+    def zeros(shape, dtype = float64):
+        D = type(dtype._value)
+        total = NDArray._count(shape)
+        data = Ptr[D](total)
+        for i in range(total):
+            data[i] = D()
+        return NDArray(shape, data)
+    
+    def zeros_like(other, dtype = float64):
+        return NumPy.zeros(other.shape, dtype)
+    
+    def ones(shape, dtype = float64):
+        D = type(dtype._value)
+        total = NDArray._count(shape)
+        data = Ptr[D](total)
+        for i in range(total):
+            data[i] = D(1)
+        return NDArray(shape, data)
+    
+    def ones_like(other, dtype = float64):
+        return NumPy.ones(other.shape, dtype)
+
+    def rand(shape):
+        from random import randint
+        total = NDArray._count(shape)
+        data = Ptr[int](total)
+        for i in range(total):
+            data[i] = randint(0, 100)
+        return NDArray(shape, data)
+    
+    def norm(x, dtype=float64):
+        D = type(dtype._value)
+        assert len(x.shape) == 2, "Norms enabled only for 2D arrays at the moment."
+        m, n = x.shape
+        p = Ptr[D](m)
+        
+        for i in range(m):
+            p[i] = 0
+            section = i * n
+            for j in range(n):
+                p[i] += x._data[section + j] * x._data[section + j]
+        
+        return NDArray((m, 1), p)
+    
+    def weighted_norm(x, w, dtype = float64):
+        assert x.shape[0] == w.shape[0], f"Invalid weighted norm shapes.\n\tx shape: {x.shape}\n\tw shape: {w.shape}"
+        return w.matmul(NumPy.norm(x, dtype))
+    
+    def identity(size, dtype=float64):
+        D = type(dtype._value)
+        iden = NumPy.zeros((size, size), dtype)
+        
+        diag_idx = 0
+        for _ in range(size):
+            iden._data[diag_idx] = D(1)
+            diag_idx += size + 1
+
+        return iden
+    
+    def arange(size, dtype = float64):
+        D = type(dtype._value)
+        data = Ptr[D](size)
+        for i in range(size): data[i] = i
+        return NDArray((size, 1), data)
+
+    def optimize_norm(w, b, d):
+        bt = b.T.matmul(w)  # b.T
+        btb = bt.matmul(b)
+        btd = bt.matmul(d)
+        return btb.inv().matmul(btd)

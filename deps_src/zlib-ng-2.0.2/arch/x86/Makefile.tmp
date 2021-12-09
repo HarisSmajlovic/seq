@@ -1,0 +1,107 @@
+# Makefile for zlib
+# Copyright (C) 1995-2013 Jean-loup Gailly, Mark Adler
+# For conditions of distribution and use, see copyright notice in zlib.h
+
+CC=clang
+CFLAGS=-O2 -fPIC -m64 -std=c99 -Wall -D_LARGEFILE64_SOURCE=1 -DZLIB_COMPAT -DWITH_GZFILEOP -DHAVE_VISIBILITY_HIDDEN -DHAVE_VISIBILITY_INTERNAL -DHAVE_BUILTIN_CTZ -DHAVE_BUILTIN_CTZLL -DUNALIGNED_OK -DUNALIGNED64_OK -DX86_FEATURES -DX86_AVX2 -DX86_AVX2_ADLER32 -DX86_AVX_CHUNKSET -DX86_SSE42_CRC_HASH -DX86_SSE42_CRC_INTRIN -DX86_SSE42_CMP_STR -DX86_SSE2 -DX86_SSE2_CHUNKSET -DX86_SSSE3 -DX86_SSSE3_ADLER32 -DX86_PCLMULQDQ_CRC
+SFLAGS=-O2 -fPIC -m64 -std=c99 -Wall -fPIC -D_LARGEFILE64_SOURCE=1 -DZLIB_COMPAT -DWITH_GZFILEOP -fno-semantic-interposition -DHAVE_VISIBILITY_HIDDEN -DHAVE_VISIBILITY_INTERNAL -DHAVE_BUILTIN_CTZ -DHAVE_BUILTIN_CTZLL -DUNALIGNED_OK -DUNALIGNED64_OK -DX86_FEATURES -DX86_AVX2 -DX86_AVX2_ADLER32 -DX86_AVX_CHUNKSET -DX86_SSE42_CRC_HASH -DX86_SSE42_CRC_INTRIN -DX86_SSE42_CMP_STR -DX86_SSE2 -DX86_SSE2_CHUNKSET -DX86_SSSE3 -DX86_SSSE3_ADLER32 -DX86_PCLMULQDQ_CRC
+INCLUDES=-I/home/hsmajlovic/sequre/pysequre/seq/deps_src/zlib-ng-2.0.2/arch/x86 -I/home/hsmajlovic/sequre/pysequre/seq/deps_src/zlib-ng-2.0.2
+SUFFIX=
+
+AVX2FLAG=-mavx2
+SSE2FLAG=-msse2
+SSSE3FLAG=-mssse3
+SSE4FLAG=-msse4
+PCLMULFLAG=-mpclmul
+
+SRCDIR=/home/hsmajlovic/sequre/pysequre/seq/deps_src/zlib-ng-2.0.2/arch/x86
+SRCTOP=/home/hsmajlovic/sequre/pysequre/seq/deps_src/zlib-ng-2.0.2
+TOPDIR=/home/hsmajlovic/sequre/pysequre/seq/deps_src/zlib-ng-2.0.2
+
+all: \
+	x86.o x86.lo \
+	adler32_avx.o adler32.lo \
+	adler32_ssse3.o adler32_ssse3.lo \
+	chunkset_avx.o chunkset_avx.lo \
+	chunkset_sse.o chunkset_sse.lo \
+	compare258_avx.o compare258_avx.lo \
+	compare258_sse.o compare258_sse.lo \
+	insert_string_sse.o insert_string_sse.lo \
+	crc_folding.o crc_folding.lo \
+	slide_avx.o slide_avx.lo \
+	slide_sse.o slide_sse.lo
+
+x86.o: $(SRCDIR)/x86.c  $(SRCDIR)/../../zutil.h
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $(SRCDIR)/x86.c
+
+x86.lo:
+	$(CC) $(SFLAGS) $(INCLUDES) -c -o $@ $(SRCDIR)/x86.c
+
+chunkset_avx.o: $(SRCDIR)/chunkset_avx.c  $(SRCTOP)/chunkset_tpl.h $(SRCTOP)/zbuild.h $(SRCTOP)/zutil.h
+	$(CC) $(CFLAGS) $(AVX2FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/chunkset_avx.c
+
+chunkset_avx.lo: $(SRCDIR)/chunkset_avx.c  $(SRCTOP)/chunkset_tpl.h $(SRCTOP)/zbuild.h $(SRCTOP)/zutil.h
+	$(CC) $(SFLAGS) $(AVX2FLAG) -DPIC $(INCLUDES) -c -o $@ $(SRCDIR)/chunkset_avx.c
+
+chunkset_sse.o: $(SRCDIR)/chunkset_sse.c  $(SRCTOP)/chunkset_tpl.h $(SRCTOP)/zbuild.h $(SRCTOP)/zutil.h
+	$(CC) $(CFLAGS) $(SSE2FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/chunkset_sse.c
+
+chunkset_sse.lo: $(SRCDIR)/chunkset_sse.c  $(SRCTOP)/chunkset_tpl.h $(SRCTOP)/zbuild.h $(SRCTOP)/zutil.h
+	$(CC) $(SFLAGS) $(SSE2FLAG) -DPIC $(INCLUDES) -c -o $@ $(SRCDIR)/chunkset_sse.c
+
+compare258_avx.o: $(SRCDIR)/compare258_avx.c  $(SRCTOP)/fallback_builtins.h $(SRCTOP)/match_tpl.h $(SRCDIR)/../../zbuild.h $(SRCDIR)/../../zutil.h
+	$(CC) $(CFLAGS) $(AVX2FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/compare258_avx.c
+
+compare258_avx.lo: $(SRCDIR)/compare258_avx.c  $(SRCTOP)/fallback_builtins.h $(SRCTOP)/match_tpl.h $(SRCDIR)/../../zbuild.h $(SRCDIR)/../../zutil.h
+	$(CC) $(SFLAGS) $(AVX2FLAG) -DPIC $(INCLUDES) -c -o $@ $(SRCDIR)/compare258_avx.c
+
+compare258_sse.o: $(SRCDIR)/compare258_sse.c  $(SRCTOP)/match_tpl.h $(SRCDIR)/../../zbuild.h $(SRCDIR)/../../zutil.h
+	$(CC) $(CFLAGS) $(SSE4FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/compare258_sse.c
+
+compare258_sse.lo: $(SRCDIR)/compare258_sse.c  $(SRCTOP)/match_tpl.h $(SRCDIR)/../../zbuild.h $(SRCDIR)/../../zutil.h
+	$(CC) $(SFLAGS) $(SSE4FLAG) -DPIC $(INCLUDES) -c -o $@ $(SRCDIR)/compare258_sse.c
+
+insert_string_sse.o: $(SRCDIR)/insert_string_sse.c  $(SRCDIR)/../../deflate.h $(SRCDIR)/../../insert_string_tpl.h $(SRCDIR)/../../zbuild.h
+	$(CC) $(CFLAGS) $(SSE4FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/insert_string_sse.c
+
+insert_string_sse.lo: $(SRCDIR)/insert_string_sse.c  $(SRCDIR)/../../deflate.h $(SRCDIR)/../../insert_string_tpl.h $(SRCDIR)/../../zbuild.h
+	$(CC) $(SFLAGS) $(SSE4FLAG) -DPIC $(INCLUDES) -c -o $@ $(SRCDIR)/insert_string_sse.c
+
+crc_folding.o: $(SRCDIR)/crc_folding.c  $(SRCDIR)/crc_folding.h $(SRCDIR)/../../zbuild.h
+	$(CC) $(CFLAGS) $(PCLMULFLAG) $(SSE4FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/crc_folding.c
+
+crc_folding.lo: $(SRCDIR)/crc_folding.c  $(SRCDIR)/crc_folding.h $(SRCDIR)/../../zbuild.h
+	$(CC) $(SFLAGS) $(PCLMULFLAG) $(SSE4FLAG) -DPIC $(INCLUDES) -c -o $@ $(SRCDIR)/crc_folding.c
+
+slide_avx.o: $(SRCDIR)/slide_avx.c  $(SRCDIR)/../../deflate.h $(SRCDIR)/../../zbuild.h
+	$(CC) $(CFLAGS) $(AVX2FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/slide_avx.c
+
+slide_avx.lo: $(SRCDIR)/slide_avx.c  $(SRCDIR)/../../deflate.h $(SRCDIR)/../../zbuild.h
+	$(CC) $(SFLAGS) $(AVX2FLAG) -DPIC $(INCLUDES) -c -o $@ $(SRCDIR)/slide_avx.c
+
+slide_sse.o: $(SRCDIR)/slide_sse.c  $(SRCDIR)/../../deflate.h $(SRCDIR)/../../zbuild.h
+	$(CC) $(CFLAGS) $(SSE2FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/slide_sse.c
+
+slide_sse.lo: $(SRCDIR)/slide_sse.c  $(SRCDIR)/../../deflate.h $(SRCDIR)/../../zbuild.h
+	$(CC) $(SFLAGS) $(SSE2FLAG) -DPIC $(INCLUDES) -c -o $@ $(SRCDIR)/slide_sse.c
+
+adler32_avx.o: $(SRCDIR)/adler32_avx.c  $(SRCDIR)/../../adler32_p.h $(SRCDIR)/../../zbuild.h $(SRCDIR)/../../zutil.h
+	$(CC) $(CFLAGS) $(AVX2FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/adler32_avx.c
+
+adler32_avx.lo: $(SRCDIR)/adler32_avx.c  $(SRCDIR)/../../adler32_p.h $(SRCDIR)/../../zbuild.h $(SRCDIR)/../../zutil.h
+	$(CC) $(SFLAGS) $(AVX2FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/adler32_avx.c
+
+adler32_ssse3.o: $(SRCDIR)/adler32_ssse3.c  $(SRCDIR)/../../adler32_p.h $(SRCDIR)/../../zbuild.h $(SRCDIR)/../../zutil.h
+	$(CC) $(CFLAGS) $(SSSE3FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/adler32_ssse3.c
+
+adler32_ssse3.lo: $(SRCDIR)/adler32_ssse3.c  $(SRCDIR)/../../adler32_p.h $(SRCDIR)/../../zbuild.h $(SRCDIR)/../../zutil.h
+	$(CC) $(SFLAGS) $(SSSE3FLAG) $(INCLUDES) -c -o $@ $(SRCDIR)/adler32_ssse3.c
+
+mostlyclean: clean
+clean:
+	rm -f *.o *.lo *~
+	rm -rf objs
+	rm -f *.gcda *.gcno *.gcov
+
+distclean:
+	rm -f Makefile

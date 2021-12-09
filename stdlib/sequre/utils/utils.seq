@@ -1,0 +1,81 @@
+import random
+import internal.gc as gc
+
+import param
+
+
+def get_address(port: int) -> str:
+    return f"{param.AF_PREFIX}{port}"
+
+
+def shapeof(value):
+    if isinstance(value, list[list]):
+        return value.shape()
+    elif isinstance(value, list):
+        return len(value)
+    elif isinstance(value, int) or isinstance(value, param.int_t):
+        return False
+    
+    raise TypeError(f'Invalid type for {value}')
+
+
+def field_size[TP]():
+    if isinstance(TP, param.int_t) or isinstance(TP, list[param.int_t]) or isinstance(TP, list[list[param.int_t]]):
+        return gc.sizeof[param.transfer_int]()
+    
+    return gc.sizeof[param.transfer_int_small]()
+
+
+def zeros[TP = param.int_t](rows: int, cols: int) -> list[list[TP]]:
+    return [[TP(0) for _ in range(cols)] for _ in range(rows)]
+
+
+def zeros_vec[TP = param.int_t](size: int) -> list[TP]:
+    return [TP(0) for _ in range(size)]
+
+
+def ones[TP = param.int_t](rows: int, cols: int) -> list[list[TP]]:
+    return [[TP(1) for _ in range(cols)] for _ in range(rows)]
+
+
+def ones_vec[TP = param.int_t](size: int) -> list[TP]:
+    return [TP(1) for _ in range(size)]
+
+
+def switch_pair[T1, T2](t: tuple[T1, T2]) -> tuple[T2, T1]:
+    return t[1], t[0]
+
+
+def cartesian(l_1: list[str], l_2: list[str]) -> list[str]:
+    c = list(len(l_1) * len(l_2))
+    for e_1 in l_1:
+        for e_2 in l_2:
+            c.append(f'{e_1} {e_2}')
+            # c.append(e_1 + e_2)
+    return c
+
+
+def evalp[TP](x: list[TP], coefs: list[TP], exps: list[list[int]], modulus: TP) -> TP:
+        result = TP(0)
+        for coef, exp in zip(coefs, exps):
+            result += x.powers(exp, modulus) * coef
+        
+        return result
+
+
+def __rand_int(modulus) -> int:
+    # TODO: #124 Upgrade stdlib.random to accept Int[N]
+    return random.randint(1, int(modulus) - 1)
+
+
+def __rand_vec[TP](length: int, base: TP) -> list[TP]:
+    l = list[TP](length)
+    for _ in range(length): l.append(TP(__rand_int(base)))
+    return l
+
+
+def __rand_mat[TP](shape: list[int], base: TP) -> list[list[TP]]:
+    m, n = shape
+    l = list[list[TP]](m)
+    for _ in range(m): l.append(__rand_vec(n, base))
+    return l

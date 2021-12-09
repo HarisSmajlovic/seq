@@ -1,0 +1,423 @@
+from math import ceil, log2
+
+from ..utils.param import *
+from ..utils.utils import shapeof
+from ..utils.primitives import mod_inv, mod_pow
+from ..types.utils import double_to_fp, int_to_fp, num_to_bits
+
+from prg import MPCPRG
+from comms import MPCComms
+from arithmetic import MPCArithmetic
+from polynomial import MPCPolynomial
+from boolean import MPCBoolean
+
+
+class MPCFP[TP]:
+    # TODO: #26 Make all methods algebraic structure agnostic
+    pid: int
+    truncations: int
+    prg: MPCPRG
+    comms: MPCComms[TP]
+    arithmetic: MPCArithmetic[TP]
+    polynomial: MPCPolynomial[TP]
+    boolean: MPCBoolean[TP]
+    invpow_cache: dict[int, TP]
+    debug: bool
+
+    def __init__(self, pid: int, prg: MPCPRG, comms: MPCComms[TP],
+                 arithmetic: MPCArithmetic[TP], polynomial: MPCPolynomial[TP], boolean: MPCBoolean[TP]):
+        self.pid = pid
+        self.prg = prg
+        self.comms = comms
+        self.arithmetic = arithmetic
+        self.polynomial = polynomial
+        self.boolean = boolean
+
+        self.invpow_cache = dict[int, TP]()
+
+        self.debug = False
+        self.reset_stats()
+
+    def print_stats(self):
+        print(f"Truncations: {self.truncations}. At CP{self.pid}")
+    
+    def reset_stats(self):
+        self.truncations = 0
+    
+    def trunc(self, a, modulus, k = NBIT_K + NBIT_F, m = NBIT_F):
+        self.truncations += 1
+        
+        shape = shapeof(a)
+        
+        r = a.zeros()
+        r_part = a.zeros()
+        
+        if self.pid == 0:
+            # TODO: #19 Fix random bits bug
+            assert (k + NBIT_V) <= MODULUS_BITS
+            r = (r.ones() << (k + NBIT_V)) - 1
+            r_part = (r >> m) if modulus.popcnt() == 1 else (r & ((1 << m) - 1)) 
+
+            self.prg.switch_seed(1)
+            r_mask = r.rand(modulus)
+            r_part_mask = r_part.rand(modulus)
+            self.prg.restore_seed(1)
+
+            r = (r - r_mask) % modulus
+            r_part = (r_part - r_part_mask) % modulus
+
+            self.comms.send(r, 2)
+            self.comms.send(r_part, 2)
+        elif self.pid == 2:
+            r = self.comms.receive[typeof(modulus)](0, shape)
+            r_part = self.comms.receive[typeof(modulus)](0, shape)
+        else:
+            self.prg.switch_seed(0)
+            r = a.rand(modulus)
+            r_part = a.rand(modulus)
+            self.prg.restore_seed(0)
+        
+        # If modulus is 2^k
+        # TODO: #19 This case is buggy for some inputs. Might be linked to #19.
+        if modulus.popcnt() == 1:
+            if self.pid > 0:
+                c = (r - a) % modulus if self.pid > 0 else a.zeros()
+                c = self.comms.reveal(c, modulus=modulus)
+                a = ((r_part - (c >> m)) % modulus) if self.pid == 2 else r_part
+            
+            return a
+        
+        c = (a + r) % modulus if self.pid > 0 else a.zeros()
+        c = self.comms.reveal(c, modulus=modulus)
+
+        c_low = (c & ((1 << m) - 1)) % modulus if self.pid > 0 else a.zeros()
+        
+        if self.pid > 0:
+            a = (a + r_part) % modulus
+            if self.pid == 1:
+                a = (a - c_low) % modulus
+            
+            if m not in self.invpow_cache:
+                self.invpow_cache[m] = mod_pow(mod_inv(TP(2), modulus), TP(m), modulus)
+                
+            a = (a * self.invpow_cache[m]) % modulus
+        
+        return a
+
+    def fp_div(self, a, b, modulus):
+        if modulus.popcnt() == 1:
+            return self.arithmetic.field_to_ring(self.__fp_div(a, b, FIELD_SIZE))
+        return self.__fp_div(a, b, modulus)
+
+    def fp_sqrt(self, a, modulus):
+        if modulus.popcnt() == 1:
+            s, sr = self.__fp_sqrt(a, FIELD_SIZE)
+            return self.arithmetic.field_to_ring(s), self.arithmetic.field_to_ring(sr)
+        return self.__fp_sqrt(a, modulus)
+    
+    def __fp_div(self, a, b, modulus):
+        if isinstance(a, int_t):
+            return self.__fp_div_aux([a], [b], modulus)[0]
+        else:
+            return self.__fp_div_aux(a, b, modulus)
+    
+    def __fp_sqrt(self, a, modulus):
+        if isinstance(a, int_t):
+            sr, srinv = self.__fp_sqrt_aux([a], modulus)
+            return sr[0], srinv[0]
+        else:
+            return self.__fp_sqrt_aux(a, modulus)
+    
+    def __nee_wrapper(self, a, modulus):
+        if isinstance(a, int_t):
+            s, sq = self.__normalizer_even_exp([a], modulus)
+            return s[0], sq[0]
+        else:
+            return self.__normalizer_even_exp(a, modulus)
+
+    def __fp_div_aux(self: MPCFP[TP], a: list[TP], b: list[TP], modulus: TP) -> list[TP]:
+        assert len(a) == len(b)
+
+        n: int = len(a)
+        
+        if n > DIV_MAX_N:
+            nbatch: int = int(ceil(n / DIV_MAX_N))
+            c = [TP(0) for _ in range(n)]
+            
+            for i in range(nbatch):
+                start: int = DIV_MAX_N * i
+                end: int = start + DIV_MAX_N
+                
+                if end > n:
+                    end = n
+                batch_size: int = end - start
+
+                a_copy = [TP(0) for _ in range(batch_size)]
+                b_copy = [TP(0) for _ in range(batch_size)]
+                for j in range(batch_size):
+                    a_copy[j] = a[start + j]
+                    b_copy[j] = b[start + j]
+
+                c_copy: list[TP] = self.__fp_div_aux(a_copy, b_copy, modulus=modulus)
+                for j in range(batch_size):
+                    c[start + j] = c_copy[j]
+            return c
+
+        niter: int = int(2 * ceil(log2(NBIT_K / 3.5)) + 1)
+
+        # Initial approximation: 1 / x_scaled ~= 5.9430 - 10 * x_scaled + 5 * x_scaled^2
+        
+        s, _ = self.__normalizer_even_exp(b, modulus)
+
+        b_scaled: list[TP] = self.arithmetic.multiply(b, s, modulus=modulus)
+        b_scaled = self.trunc(b_scaled, modulus, NBIT_K, NBIT_K - NBIT_F)
+
+        b_scaled_sq: list[TP] = self.arithmetic.multiply(b_scaled, b_scaled, modulus=modulus)
+        b_scaled_sq = self.trunc(b_scaled_sq, modulus)
+
+        scaled_est = (((b_scaled_sq * 5) % modulus) - (b_scaled * 10) % modulus) % modulus if self.pid != 0 else [TP(0) for _ in range(n)]
+        if self.pid == 1:
+            coeff = double_to_fp(5.9430, modulus)
+            scaled_est = (scaled_est + coeff) % modulus
+
+        w: list[TP] = self.arithmetic.multiply(scaled_est, s, modulus=modulus)
+        # scaled_est has bit length <= NBIT_F + 2, and s has bit length <= NBIT_K
+        # so the bit length of w is at most NBIT_K + NBIT_F + 2
+        w = self.trunc(w, modulus, NBIT_K + NBIT_F + 2, NBIT_K - NBIT_F)
+
+        x: list[TP] = self.arithmetic.multiply(w, b, modulus=modulus)
+        x = self.trunc(x, modulus)
+
+        one: TP = int_to_fp(1, modulus)
+
+        x *= -1
+        if self.pid == 1:
+            x = (x + one) % modulus
+        
+        y: list[TP] = self.arithmetic.multiply(a, w, modulus=modulus)
+        y = self.trunc(y, modulus)
+
+        for _ in range(niter):
+            xr, xm = self.arithmetic.__beaver_partition(x, modulus=modulus)
+            yr, ym = self.arithmetic.__beaver_partition(y, modulus=modulus)
+            
+            xpr = (xr + one if self.pid > 0 else xr) % modulus
+
+            y = self.arithmetic.__beaver_mult(yr, ym, xpr, xm, modulus)
+            x = self.arithmetic.__beaver_mult(xr, xm, xr, xm, modulus)
+
+            x = self.arithmetic.__beaver_reconstruct(x, modulus=modulus)
+            y = self.arithmetic.__beaver_reconstruct(y, modulus=modulus)
+
+            x = self.trunc(x, modulus)
+            y = self.trunc(y, modulus)
+
+        if self.pid == 1:
+            x = (x + one) % modulus
+
+        c: list[TP] = self.arithmetic.multiply(y, x, modulus=modulus)
+        return self.trunc(c, modulus)
+
+    def __fp_sqrt_aux(self: MPCFP[TP], a: list[TP], modulus: TP) -> tuple[list[TP], list[TP]]:
+        n = len(a)
+
+        if n > DIV_MAX_N:
+            nbatch = int(ceil(n / DIV_MAX_N))
+            b = [TP(0) for _ in range(n)]
+            b_inv = [TP(0) for _ in range(n)]
+            
+            for i in range(nbatch):
+                start = DIV_MAX_N * i
+                end = start + DIV_MAX_N
+                if end > n: end = n
+                batch_size = end - start
+                a_copy = [TP(0) for _ in range(batch_size)]
+                
+                for j in range(batch_size):
+                    a_copy[j] = a[start + j]
+                
+                b_copy, b_inv_copy = self.__fp_sqrt_aux(a_copy, modulus)
+                
+                for j in range(batch_size):
+                    b[start + j] = b_copy[j]
+                    b_inv[start + j] = b_inv_copy[j]
+            
+            return b, b_inv
+
+        # Warning: Currently using the same iter as division -- possibly need to update
+        niter = int(2 * ceil(log2((NBIT_K) / 3.5)))
+
+        # Initial approximation: 1 / sqrt(a_scaled) ~= 2.9581 - 4 * a_scaled + 2 * a_scaled^2
+        # Bottleneck
+        s, s_sqrt = self.__normalizer_even_exp(a, modulus)
+
+        a_scaled = self.arithmetic.multiply(a, s, modulus=modulus)
+        a_scaled = self.trunc(a_scaled, modulus, NBIT_K, NBIT_K - NBIT_F)
+
+        a_scaled_sq = self.arithmetic.multiply(a_scaled, a_scaled, modulus=modulus)
+        a_scaled_sq = self.trunc(a_scaled_sq, modulus)
+
+        scaled_est = (((-a_scaled * 4) % modulus) + (a_scaled_sq + a_scaled_sq) % modulus) % modulus if self.pid != 0 else [TP(0) for _ in range(n)]
+        
+        if self.pid == 1:
+            coeff = double_to_fp(2.9581, modulus)
+            scaled_est = (scaled_est + coeff) % modulus
+        
+        h = self.arithmetic.multiply(scaled_est, s_sqrt, modulus)
+        # Our scaled initial approximation (scaled_est) has bit length <= NBIT_F + 2
+        # and s_sqrt is at most NBIT_K/2 bits, so their product is at most NBIT_K/2 +
+        # NBIT_F + 2
+        h = self.trunc(h, modulus, NBIT_K // 2 + NBIT_F + 2, (NBIT_K - NBIT_F) // 2 + 1)
+
+        g = (h + h) % modulus
+        g = self.arithmetic.multiply(g, a, modulus)
+        g = self.trunc(g, modulus)
+
+        onepointfive: TP = double_to_fp(1.5, modulus)
+
+        for _ in range(niter):
+            r = self.arithmetic.multiply(h, g, modulus)
+            r = self.trunc(r, modulus)
+            r = (-r) % modulus
+            if self.pid == 1:
+                r = (r + onepointfive) % modulus
+
+            # TODO: #16 Do h and g in parallel
+            h = self.arithmetic.multiply(h, r, modulus)
+            g = self.arithmetic.multiply(g, r, modulus)
+            h = self.trunc(h, modulus)
+            g = self.trunc(g, modulus)
+        
+        b_inv = (h + h) % modulus
+        b = g
+
+        return b, b_inv
+    
+    def __share_random_bits(self: MPCFP[TP], k: int, n: int, modulus: int) -> tuple[list[TP], list[list[int]]]:
+        r = [TP(1) for _ in range(n)]
+        rbits = [[0 for _ in range(k)] for _ in range(n)]
+        if self.pid == 0:
+            # TODO: #19 Fix random bits bug
+            assert (k + NBIT_V) <= MODULUS_BITS
+            r = (r << (k + NBIT_V)) - 1
+            rbits = num_to_bits[int](r, k)
+
+            self.prg.switch_seed(1)
+            r_mask = r.rand(TP(modulus))
+            rbits_mask = rbits.rand(modulus)
+            self.prg.restore_seed(1)
+
+            r -= r_mask
+            r %= TP(modulus)
+
+            rbits -= rbits_mask
+            rbits %= modulus
+
+            self.comms.send(r, 2)
+            self.comms.send(rbits, 2)
+            return r, rbits
+        elif self.pid == 2:
+            r = self.comms.receive[TP](0, n)
+            rbits = self.comms.receive[int](0, [n, k])
+            return r, rbits
+        else:
+            self.prg.switch_seed(0)
+            r = r.rand(TP(modulus))
+            rbits = rbits.rand(modulus)
+            self.prg.restore_seed(0)
+            return r, rbits
+
+    def __normalizer_even_exp(self: MPCFP[TP], a: list[TP], modulus: TP) -> tuple[list[TP], list[TP]]:
+        n: int = len(a)
+        small_modulus: int = SECOND_FIELD_SIZE
+
+        r, rbits = self.__share_random_bits(NBIT_K, n, small_modulus)
+
+        e: list[TP] = [TP(0) for _ in range(n)] if self.pid == 0 else a + r
+        e = self.comms.reveal(e, modulus=modulus)
+        ebits: list[list[int]] = [[0 for _ in range(NBIT_K)] for _ in range(n)] if self.pid == 0 else num_to_bits[int](e, NBIT_K)
+        
+        c: list[int] = self.boolean.less_than_bits_public(rbits, ebits, small_modulus)
+
+        if self.pid > 0:
+            c = -c
+            if self.pid == 1:
+                c = c + 1
+        c %= small_modulus
+        
+        ep: list[list[int]] = [[0 for _ in range(NBIT_K + 1)] for _ in range(n)]
+        if self.pid > 0:
+            for i in range(n):
+                ep[i][0] = c[i]
+                for j in range(1, NBIT_K + 1):
+                    ep[i][j] = ((1 - ebits[i][j - 1] * 2) * rbits[i][j - 1]) % small_modulus
+                    if self.pid == 1:
+                        ep[i][j] = (ep[i][j] + ebits[i][j - 1]) % small_modulus
+        
+        E: list[list[int]] = self.boolean.prefix_or(ep, small_modulus)
+
+        tpneg = list[list[int]](n)  # zeros((n, NBIT_K))
+        if self.pid > 0:
+            for i in range(n):
+                row = list[int](NBIT_K)
+                for j in range(NBIT_K):
+                    row.append((E[i][j] - (1 - ebits[i][j]) * rbits[i][j]) % small_modulus)
+                tpneg.append(row)
+        else:
+            for _ in range(n):
+                tpneg.append([0 for _ in range(NBIT_K)])
+        
+        Tneg: list[list[int]] = self.boolean.prefix_or(tpneg, small_modulus)
+
+        half_len: int = NBIT_K // 2
+
+        efir = (ebits * Tneg) % small_modulus if self.pid > 0 else [[0 for _ in range(NBIT_K)] for _ in range(n)]
+        rfir = self.arithmetic.multiply(rbits, Tneg, small_modulus)
+
+        double_flag: list[int] = self.boolean.less_than_bits(efir, rfir, small_modulus)
+        odd_bits = list[list[int]](n)  # zeros((n, half_len))
+        even_bits = list[list[int]](n) # zeros((n, half_len))
+
+        if self.pid > 0:
+            for i in range(n):
+                odd_row = list[int](half_len)
+                even_row = list[int](half_len)
+                for j in range(half_len):
+                    odd_row.append(((1 - Tneg[i][2 * j + 1]) if self.pid == 1 else -Tneg[i][2 * j + 1]) % small_modulus)
+                    even_row.append((0 if (2 * j + 2) >= NBIT_K else (1 - Tneg[i][2 * j + 2]) if self.pid == 1 else -Tneg[i][2 * j + 2]) % small_modulus)
+                odd_bits.append(odd_row)
+                even_bits.append(even_row)
+        else:
+            for i in range(n):
+                odd_bits.append([0 for _ in range(half_len)])
+                even_bits.append([0 for _ in range(half_len)])
+        
+        odd_bit_sum: list[int] = [0 for _ in range(n)]
+        even_bit_sum: list[int] = [0 for _ in range(n)]
+        
+        for i in range(n):
+            for e in odd_bits[i]:
+                odd_bit_sum[i] += e
+            for e in even_bits[i]:
+                even_bit_sum[i] += e
+        
+        odd_bit_sum %= small_modulus
+        even_bit_sum %= small_modulus
+        
+        if self.pid == 1:
+            odd_bit_sum = (odd_bit_sum + 1) % small_modulus
+            even_bit_sum = (even_bit_sum + 1) % small_modulus
+        
+        # If double_flag = true, then use odd_bits, otherwise use even_bits
+
+        diff: list[int] = (odd_bit_sum - even_bit_sum) % small_modulus if self.pid != 0 else [0 for _ in range(n)]
+        diff = self.arithmetic.multiply(double_flag, diff, small_modulus)
+        chosen_bit_sum: list[int] = (even_bit_sum + diff) % small_modulus if self.pid != 0 else [0 for _ in range(n)]
+        b_mat: list[list[TP]] = self.polynomial.table_lookup([TP(e) for e in chosen_bit_sum], 1, modulus)
+
+        if self.pid > 0:
+            b_sqrt: list[TP] = b_mat[0]
+            b: list[TP] = b_mat[1]
+            return b, b_sqrt
+        
+        return [TP(0) for _ in range(n)], [TP(0) for _ in range(n)]

@@ -1,6 +1,7 @@
 #include "dsl/plugins.h"
 #include "parser/parser.h"
 #include "seq/seq.h"
+#include "codim/codim.h"
 #include "sir/llvm/llvisitor.h"
 #include "sir/transform/manager.h"
 #include "sir/transform/pass.h"
@@ -122,6 +123,10 @@ ProcessResult processSource(const std::vector<const char *> &args) {
   // load Seq
   seq::Seq seqDSL;
   plm.load(&seqDSL);
+
+  // load Codim
+  seq::Codim codimDSL;
+  plm.load(&codimDSL);
 
   LOG_TIME("[T] ir-setup = {:.1f}",
            std::chrono::duration_cast<std::chrono::milliseconds>(
