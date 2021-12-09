@@ -38,3 +38,6 @@ def distributive():
 def C():
     pass
 
+@__attribute__
+def optimize_energy():
+    pass
