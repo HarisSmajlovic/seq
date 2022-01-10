@@ -662,6 +662,7 @@ void ArithmeticsOptimizations::applyBeaverOptimizations(CallInstr *v) {
   auto *f = util::getFunc(v->getCallee());
   if (!f)
     return;
+  bool isEq = f->getName().find("__eq__") != std::string::npos;
   bool isGt = f->getName().find("__gt__") != std::string::npos;
   bool isLt = f->getName().find("__lt__") != std::string::npos;
   bool isAdd = f->getName().find("__add__") != std::string::npos;
@@ -669,7 +670,7 @@ void ArithmeticsOptimizations::applyBeaverOptimizations(CallInstr *v) {
   bool isMul = f->getName().find("__mul__") != std::string::npos;
   bool isDiv = f->getName().find("__truediv__") != std::string::npos;
   bool isPow = f->getName().find("__pow__") != std::string::npos;
-  if (!isGt && !isLt && !isAdd && !isSub && !isMul && !isPow && !isDiv)
+  if (!isEq && !isGt && !isLt && !isAdd && !isSub && !isMul && !isPow && !isDiv)
     return;
 
   auto *M = v->getModule();
@@ -711,6 +712,7 @@ void ArithmeticsOptimizations::applyBeaverOptimizations(CallInstr *v) {
     return;
 
   std::string methodName =
+    isEq      ? "secure_eq"       :
     isGt      ? "secure_gt"       :
     isLt      ? "secure_lt"       :
     isAdd     ? "secure_add"      :
