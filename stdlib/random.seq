@@ -205,7 +205,50 @@ class Random:
             n <<= 8
             n |= int(b[x])
         return n
+    
+    def from_bytes_big_intn[TP](self, b) -> TP:
+        """
+        Return the integer represented by the given array of bytes.
+        The argument b must either be a bytes-like object or an iterable
+        producing bytes.
+        """
+        n = TP(0)
+        for x in range(len(b)):
+            n <<= 8
+            n |= int(b[x])
+        return n
+    
+    def getrandbits_intn[TP](self, k: int) -> TP:
+        """
+        getrandbits(k) -> x
+        Generates an int with k random bits.
+        """
+        words = (k - 1) // 32 + 1
+        wordarray = __array__[u32](32)  # TODO: (Haris) extract the length from TP in new Seq version
+        for i in range(words):
+            wordarray[i] = self.gen.genrand_int32()
+            k -= 32
 
+        return self.from_bytes_big_intn[TP](wordarray.slice(0, words))
+    
+    def bit_length_intn(self, n: TP) -> int:
+        """
+        Inefficient way.
+        TODO: Implement a faster approach: https://graphics.stanford.edu/~seander/bithacks.html#IntegerLog
+        """
+        len = 0
+        while n:
+            len += 1
+            n = n >> TP(1)
+        return len
+
+    def randbelow_int_n(self, n: TP) -> TP:
+        """
+        Return a random int in the range [0,n).  Raises ValueError if n==0.
+        """
+        k = self.bit_length_intn(n)  # don't use (n-1) here because n can be 1
+        return self.getrandbits_intn(k)
+    
     def getrandbits(self, k: int) -> int:
         """
         getrandbits(k) -> x
@@ -648,6 +691,9 @@ def seed(a: int):
     _gen.init_genrand(u32(a))
 
 seed(int(_time()))
+
+def getrandbits_intn(k: int):
+    return _rnd.getrandbits_intn(k)
 
 def getrandbits(k: int):
     return _rnd.getrandbits(k)
