@@ -202,7 +202,7 @@ class Random:
         """
         n = 0
         for x in range(len(b)):
-            n <<= 8
+            n <<= 32
             n |= int(b[x])
         return n
     
@@ -214,7 +214,7 @@ class Random:
         """
         n = TP(0)
         for x in range(len(b)):
-            n <<= 8
+            n <<= 32
             n |= int(b[x])
         return n
     
@@ -224,14 +224,14 @@ class Random:
         Generates an int with k random bits.
         """
         words = (k - 1) // 32 + 1
-        wordarray = __array__[u32](32)  # TODO: (Haris) extract the length from TP in new Seq version
+        wordarray = __array__[u32](16)  # TODO: Extract the length from TP in new Seq version
         for i in range(words):
             wordarray[i] = self.gen.genrand_int32()
             k -= 32
 
         return self.from_bytes_big_intn[TP](wordarray.slice(0, words))
     
-    def bit_length_intn(self, n: TP) -> int:
+    def bit_length_intn[TP](self, n: TP) -> int:
         """
         Inefficient way.
         TODO: Implement a faster approach: https://graphics.stanford.edu/~seander/bithacks.html#IntegerLog
@@ -242,12 +242,12 @@ class Random:
             n = n >> TP(1)
         return len
 
-    def randbelow_int_n(self, n: TP) -> TP:
+    def randbelow_int_n[TP](self, n: TP) -> TP:
         """
         Return a random int in the range [0,n).  Raises ValueError if n==0.
         """
-        k = self.bit_length_intn(n)  # don't use (n-1) here because n can be 1
-        return self.getrandbits_intn(k)
+        k = self.bit_length_intn(n) - 1  # don't use (n-1) here because n can be 1
+        return self.getrandbits_intn[TP](k)
     
     def getrandbits(self, k: int) -> int:
         """
@@ -692,8 +692,11 @@ def seed(a: int):
 
 seed(int(_time()))
 
-def getrandbits_intn(k: int):
-    return _rnd.getrandbits_intn(k)
+def getrandbits_intn[TP](k: int):
+    return _rnd.getrandbits_intn[TP](k)
+
+def randbelow_int_n[TP](n: TP) -> TP:
+    return _rnd.randbelow_int_n[TP](n)
 
 def getrandbits(k: int):
     return _rnd.getrandbits(k)
