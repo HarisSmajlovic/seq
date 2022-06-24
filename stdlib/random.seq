@@ -158,9 +158,8 @@ class RandomGenerator:
 
     def genrand_int128(self) -> u128:
         """
+        TODO: Generalize to UInt[N]
         genrand_int32() -> u32
-
-        generates a random number on [0,0xffffffff]-interval
         """
         if self.next > N_4:
             _gen_rand_all_simd(self.state)
@@ -265,14 +264,13 @@ class Random:
     
     def getrandbits_128[TP](self, k: int) -> TP:
         """
-        getrandbits(k) -> x
-        Generates an int with k random bits.
+        TODO: Generalize to UInt[N]
         """
         return TP(self.gen.genrand_int128() >> (128 - k))
     
     def randbelow_128[TP](self, n: TP, bitlen: int) -> TP:
         """
-        Return a random int in the range [0,n).  Raises ValueError if n==0.
+        TODO: Generalize to UInt[N]
         """
         r = self.getrandbits_128[TP](bitlen)
         while r >= n: r = self.getrandbits_128[TP](bitlen)
@@ -726,9 +724,11 @@ def seed(a: int):
 seed(int(_time()))
 
 def getrandbits_intn[TP](k: int):
+    # TODO: Generalize to UInt[N]
     return _rnd.getrandbits_128[TP](k)
 
 def randbelow_intn[TP](n: TP, bitlen: int) -> TP:
+    # TODO: Generalize to UInt[N]
     return _rnd.randbelow_128[TP](n, bitlen)
 
 def getrandbits(k: int):
