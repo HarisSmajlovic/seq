@@ -4,12 +4,75 @@ from math import log as _log, exp as _exp, pi as _pi, e as _e, ceil as _ceil
 from bisect import bisect as _bisect
 from time import time as _time
 
+# Global params
 N = 624
 M = 397
+# Float params
 LOG4 = _log(4.0)
 NV_MAGICCONST = 4 * _exp(-0.5) / _sqrt(2.0)
 SG_MAGICCONST = 1.0 + _log(4.5)
 TWOPI = 2.0 * _pi
+# SIMD params
+u128 = UInt[128]
+N_4 = N - 4
+SFMT_POS2 = 488
+SSE_MASK = (((((u128(0xdfffffef) << u128(32)) | u128(0xddfecb7f)) << u128(32)) | u128(0xbffaffff)) << u128(32)) | u128(0xbffffff6)
+
+
+@llvm
+def _at(src: ptr[u32], idx: i64) -> ptr[u32]:
+    %0 = getelementptr i32, i32* %src, i64 %idx
+    ret i32* %0
+@llvm
+def _get_elem_value_128(src: ptr[u32], idx: i64) -> u128:
+    %0 = getelementptr i32, i32* %src, i64 %idx
+    %1 = bitcast i32* %0 to <4 x i32>*
+    %2 = load <4 x i32>, <4 x i32>* %1
+    %3 = bitcast <4 x i32> %2 to i128
+    ret i128 %3
+@llvm
+def _mm_recursion(a: ptr[u32], b: ptr[u32], c: ptr[u32], d: ptr[u32], sse_mask: u128 = SSE_MASK) -> u128:
+    %a_mm_ptr = bitcast i32* %a to <4 x i32>*
+    %a_mm = load <4 x i32>, <4 x i32>* %a_mm_ptr
+    %a_128 = bitcast <4 x i32> %a_mm to i128
+    %b_mm_ptr = bitcast i32* %b to <4 x i32>*
+    %b_mm = load <4 x i32>, <4 x i32>* %b_mm_ptr
+    %c_mm_ptr = bitcast i32* %c to <4 x i32>*
+    %c_mm = load <4 x i32>, <4 x i32>* %c_mm_ptr
+    %d_mm_ptr = bitcast i32* %d to <4 x i32>*
+    %d_mm = load <4 x i32>, <4 x i32>* %d_mm_ptr
+    %a_128_shl = shl i128 %a_128, 1
+    %x = bitcast i128 %a_128_shl to <4 x i32>
+    %sse_2_mask_mm = bitcast i128 %sse_mask to <4 x i32>
+    %y_0 = lshr <4 x i32> %b_mm, < i32 11, i32 11, i32 11, i32 11>
+    %z_0 = lshr <4 x i32> %c_mm, < i32 1, i32 1, i32 1, i32 1>
+    %v = shl <4 x i32> %d_mm, < i32 18, i32 18, i32 18, i32 18>
+    %z_1 = xor <4 x i32> %z_0, %a_mm
+    %z_2 = xor <4 x i32> %z_1, %v
+    %y_1 = and <4 x i32> %y_0, %sse_2_mask_mm
+    %z_3 = xor <4 x i32> %z_2, %x
+    %z_4 = xor <4 x i32> %z_3, %y_1
+    store <4 x i32> %z_4, <4 x i32>* %a_mm_ptr
+    ret i128 %sse_mask
+
+
+def _gen_rand_all_simd(state: Array[u32]):
+    i = 0
+    r1 = _at(state.ptr, N - 8)
+    r2 = _at(state.ptr, N - 4)
+
+    while i < (N - SFMT_POS2):
+        _mm_recursion(_at(state.ptr, i), _at(state.ptr, i + SFMT_POS2), r1, r2)
+        r1 = r2
+        r2 = _at(state.ptr, i)
+        i += 4
+
+    while i < N:
+        _mm_recursion(_at(state.ptr, i), _at(state.ptr, i + SFMT_POS2 - N), r1, r2)
+        r1 = r2
+        r2 = _at(state.ptr, i)
+        i += 4
+
 
 # http://www.math.sci.hiroshima-u.ac.jp/~m-mat/MT/MT2002/CODES/mt19937ar.c
 class RandomGenerator:
@@ -75,32 +138,8 @@ class RandomGenerator:
 
         generates a random number on [0,0xffffffff]-interval
         """
-        MATRIX_A = u32(0x9908b0df)
-        UPPER_MASK = u32(0x80000000)
-        LOWER_MASK = u32(0x7fffffff)
-        mag01 = __array__[u32](2)
-        mag01[0] = u32(0)
-        mag01[1] = MATRIX_A
-
         if self.next >= N:
-            if self.next == N+1:
-                self.init_genrand(u32(5489))
-
-            mt = self.state
-            kk = 0
-
-            while kk < N - M:
-                y = (mt[kk] & UPPER_MASK) | (mt[kk+1] & LOWER_MASK)
-                mt[kk] = mt[kk+M] ^ (y >> u32(1)) ^ mag01[int(y & u32(1))]
-                kk += 1
-
-            while kk < N - 1:
-                y = (mt[kk] & UPPER_MASK) | (mt[kk+1] & LOWER_MASK)
-                mt[kk] = mt[kk+(M-N)] ^ (y >> u32(1)) ^ mag01[int(y & u32(1))]
-                kk += 1
-
-            y = (mt[N-1] & UPPER_MASK) | (mt[0] & LOWER_MASK)
-            mt[N-1] = mt[M-1] ^ (y >> u32(1)) ^ mag01[int(y & u32(1))]
+            _gen_rand_all_simd(self.state)
             self.next = 0
 
         y = self.state[self.next]
@@ -113,6 +152,22 @@ class RandomGenerator:
         y ^= (y >> u32(18))
 
         return y
+
+    def genrand_int128(self) -> u128:
+        """
+        genrand_int32() -> u32
+
+        generates a random number on [0,0xffffffff]-interval
+        """
+        if self.next > N_4:
+            _gen_rand_all_simd(self.state)
+            self.next = 0
+
+        y = _get_elem_value_128(self.state.ptr, self.next)
+        self.next += 4
+
+        return y
+
 
     def genrand_res53(self) -> float:
         """
@@ -140,7 +195,6 @@ class RandomGenerator:
         key[4] = u32(now >> u32(32))
 
         self.init_by_array(key, len(key))
-
 
     def seed(self):
         """
@@ -202,77 +256,53 @@ class Random:
         """
         n = 0
         for x in range(len(b)):
-            n <<= 32
+            n <<= 8
             n |= int(b[x])
         return n
     
-    def from_bytes_big_intn[TP](self, b) -> TP:
-        """
-        Return the integer represented by the given array of bytes.
-        The argument b must either be a bytes-like object or an iterable
-        producing bytes.
-        """
-        n = TP(0)
-        for x in range(len(b)):
-            n <<= 32
-            n |= int(b[x])
-        return n
-    
-    def getrandbits_intn[TP](self, k: int) -> TP:
+    def getrandbits_128[TP](self, k: int) -> TP:
         """
         getrandbits(k) -> x
         Generates an int with k random bits.
         """
-        words = (k - 1) // 32 + 1
-        wordarray = __array__[u32](16)  # TODO: Extract the length from TP in new Seq version
-        for i in range(words):
-            wordarray[i] = self.gen.genrand_int32()
-            k -= 32
-
-        return self.from_bytes_big_intn[TP](wordarray.slice(0, words))
+        return TP(self.gen.genrand_int128() >> (128 - k))
     
-    def bit_length_intn[TP](self, n: TP) -> int:
-        """
-        Inefficient way.
-        TODO: Implement a faster approach: https://graphics.stanford.edu/~seander/bithacks.html#IntegerLog
-        """
-        len = 0
-        while n:
-            len += 1
-            n = n >> TP(1)
-        return len
-
-    def randbelow_int_n[TP](self, n: TP) -> TP:
+    def randbelow_128[TP](self, n: TP, bitlen: int) -> TP:
         """
         Return a random int in the range [0,n).  Raises ValueError if n==0.
         """
-        k = self.bit_length_intn(n) - 1  # don't use (n-1) here because n can be 1
-        return self.getrandbits_intn[TP](k)
+        r = self.getrandbits_128[TP](bitlen)
+        while r >= n: r = self.getrandbits_128[TP](bitlen)
+        return r
+    
+    def from_u32s_big(self, u32s, count) -> int:
+        """
+        Return the integer represented by the given array of u32 ints.
+        """
+        n = 0
+        for i in range(count):
+            n <<= 32
+            n |= int(u32s[i])
+        return n
     
     def getrandbits(self, k: int) -> int:
         """
         getrandbits(k) -> x
         Generates an int with k random bits.
         """
+        assert k <= 64, f"Random bits generator: Bitlen should be less than 65. Bitlen: {k}"
 
-        if k <= 32:     # Fast path
-            r = int(self.gen.genrand_int32())
-            m = r >> (32 - k)
-            return m
+        word_lo = self.gen.genrand_int32()
+        word_hi = u32(0)
+        if k > 32: word_hi = self.gen.genrand_int32() >> u32(64 - k)
+        else: word_lo >>= u32(32 - k)
 
-        words = (k - 1) // 32 + 1
-        assert words <= 4
-        wordarray = __array__[u32](4)
-        for i in range(words):
-            r = int(self.gen.genrand_int32())
-            if k < 32: r >>= (32 - k)
-            wordarray[i] = u32(r)
-            k -= 32
-
-        return self.from_bytes_big(wordarray.slice(0, words))
+        return (int(word_hi) << 32) | int(word_lo)
 
     def bit_length(self, n: int) -> int:
         """
+        Inefficient way.
+        TODO: Implement a faster approach: https://graphics.stanford.edu/~seander/bithacks.html#IntegerLog
         """
         len = 0
         while n:
@@ -693,10 +723,10 @@ def seed(a: int):
 seed(int(_time()))
 
 def getrandbits_intn[TP](k: int):
-    return _rnd.getrandbits_intn[TP](k)
+    return _rnd.getrandbits_128[TP](k)
 
-def randbelow_int_n[TP](n: TP) -> TP:
-    return _rnd.randbelow_int_n[TP](n)
+def randbelow_intn[TP](n: TP, bitlen: int) -> TP:
+    return _rnd.randbelow_128[TP](n, bitlen)
 
 def getrandbits(k: int):
     return _rnd.getrandbits(k)
