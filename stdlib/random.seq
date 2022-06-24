@@ -14,6 +14,7 @@ SG_MAGICCONST = 1.0 + _log(4.5)
 TWOPI = 2.0 * _pi
 # SIMD params
 u128 = UInt[128]
+N_2 = N - 2
 N_4 = N - 4
 DIFF_POS = 34
 assert DIFF_POS < FREQ, f"Random generator: Wrong parameters: Invalid state array position: DIFF_POS {DIFF_POS} >= FREQ {FREQ}"
@@ -29,10 +30,15 @@ def _at(src: ptr[u32], idx: i64) -> ptr[u32]:
 @llvm
 def _get_elem_value_128(src: ptr[u32], idx: i64) -> u128:
     %0 = getelementptr i32, i32* %src, i64 %idx
-    %1 = bitcast i32* %0 to <4 x i32>*
-    %2 = load <4 x i32>, <4 x i32>* %1
-    %3 = bitcast <4 x i32> %2 to i128
-    ret i128 %3
+    %1 = bitcast i32* %0 to i128*
+    %2 = load i128, i128* %1
+    ret i128 %2
+@llvm
+def _get_elem_value_64(src: ptr[u32], idx: i64) -> u64:
+    %0 = getelementptr i32, i32* %src, i64 %idx
+    %1 = bitcast i32* %0 to i64*
+    %2 = load i64, i64* %1
+    ret i64 %2
 @llvm
 def _mm_recursion(a: ptr[u32], b: ptr[u32], c: ptr[u32], d: ptr[u32], sse_mask: u128 = SSE_MASK) -> i8:
     %a_mm_ptr = bitcast i32* %a to <4 x i32>*
@@ -156,10 +162,22 @@ class RandomGenerator:
 
         return y
 
+    def genrand_int64(self) -> u64:
+        """
+        TODO: Generalize to UInt[N]
+        """
+        if self.next > N_2:
+            _gen_rand_all_simd(self.state)
+            self.next = 0
+
+        y = _get_elem_value_64(self.state.ptr, self.next)
+        self.next += 2
+
+        return y
+
     def genrand_int128(self) -> u128:
         """
         TODO: Generalize to UInt[N]
-        genrand_int32() -> u32
         """
         if self.next > N_4:
             _gen_rand_all_simd(self.state)
