@@ -17,7 +17,7 @@ u128 = UInt[128]
 N_2 = N - 2
 N_4 = N - 4
 DIFF_POS = 34
-assert DIFF_POS < FREQ, f"Random generator: Wrong parameters: Invalid state array position: DIFF_POS {DIFF_POS} >= FREQ {FREQ}"
+assert DIFF_POS < FREQ, f"Random generator:\n\tWrong parameters:\n\tInvalid state array position: DIFF_POS {DIFF_POS} >= FREQ {FREQ}"
 SFMT_POS2 = (FREQ - DIFF_POS) * 4
 N_SFMT_POS2 = N - SFMT_POS2
 SSE_MASK = (((((u128(0xdfffffef) << u128(32)) | u128(0xddfecb7f)) << u128(32)) | u128(0xbffaffff)) << u128(32)) | u128(0xbffffff6)
@@ -28,17 +28,17 @@ def _at(src: ptr[u32], idx: i64) -> ptr[u32]:
     %0 = getelementptr i32, i32* %src, i64 %idx
     ret i32* %0
 @llvm
-def _get_elem_value_128(src: ptr[u32], idx: i64) -> u128:
-    %0 = getelementptr i32, i32* %src, i64 %idx
-    %1 = bitcast i32* %0 to i128*
-    %2 = load i128, i128* %1
-    ret i128 %2
-@llvm
 def _get_elem_value_64(src: ptr[u32], idx: i64) -> u64:
     %0 = getelementptr i32, i32* %src, i64 %idx
     %1 = bitcast i32* %0 to i64*
     %2 = load i64, i64* %1
     ret i64 %2
+@llvm
+def _get_elem_value_128(src: ptr[u32], idx: i64) -> u128:
+    %0 = getelementptr i32, i32* %src, i64 %idx
+    %1 = bitcast i32* %0 to i128*
+    %2 = load i128, i128* %1
+    ret i128 %2
 @llvm
 def _mm_recursion(a: ptr[u32], b: ptr[u32], c: ptr[u32], d: ptr[u32], sse_mask: u128 = SSE_MASK) -> i8:
     %a_mm_ptr = bitcast i32* %a to <4 x i32>*
