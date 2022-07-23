@@ -63,6 +63,23 @@ def max(*args):
             if i > m: m = i
         return m
 
+def max_by_key(iterable, key):
+    x = iterable.__iter__()
+    if not x.done():
+        s = x.next()
+        k = key(s)
+        while not x.done():
+            i = x.next()
+            ki = key(i)
+            if ki > k:
+                s = i
+                k = ki
+        x.destroy()
+        return s
+    else:
+        x.destroy()
+    raise ValueError("empty sequence")
+
 def len(x):
     """
     Return the length of x
