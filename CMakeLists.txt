@@ -91,8 +91,8 @@ if (APPLE)
 else ()
     target_link_libraries(seqrt PUBLIC seqomp ${STATIC_LIBCPP} -Wl,--whole-archive ${ZLIB} ${BDWGC} -Wl,--no-whole-archive)
 endif ()
-target_include_directories(seqrt PRIVATE ${backtrace_SOURCE_DIR} "${gc_SOURCE_DIR}/include" runtime)
-target_link_libraries(seqrt PRIVATE omp backtrace ${STATIC_LIBCPP} LLVMSupport)
+set(BACKTRACE ${SEQ_DEP}/lib/libbacktrace.a)
+target_link_libraries(seqrt PUBLIC ${BACKTRACE})
 
 # Seq parsing library
 include_directories(${OCAML_STDLIB_PATH})
