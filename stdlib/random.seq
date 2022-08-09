@@ -4,12 +4,92 @@ from math import log as _log, exp as _exp, pi as _pi, e as _e, ceil as _ceil
 from bisect import bisect as _bisect
 from time import time as _time
 
-N = 624
-M = 397
+# Global params
+FREQ = 156
+N = FREQ * 4
+# Float params
 LOG4 = _log(4.0)
 NV_MAGICCONST = 4 * _exp(-0.5) / _sqrt(2.0)
 SG_MAGICCONST = 1.0 + _log(4.5)
 TWOPI = 2.0 * _pi
+# SIMD params
+u128 = UInt[128]
+u192 = UInt[192]
+N_2 = N - 2
+N_4 = N - 4
+N_6 = N - 6
+DIFF_POS = 34
+assert DIFF_POS < FREQ, f"Random generator:\n\tWrong parameters:\n\tInvalid state array position: DIFF_POS {DIFF_POS} >= FREQ {FREQ}"
+SFMT_POS2 = (FREQ - DIFF_POS) * 4
+N_SFMT_POS2 = N - SFMT_POS2
+SSE_MASK = (((((u128(0xdfffffef) << u128(32)) | u128(0xddfecb7f)) << u128(32)) | u128(0xbffaffff)) << u128(32)) | u128(0xbffffff6)
+
+
+@llvm
+def _at(src: ptr[u32], idx: i64) -> ptr[u32]:
+    %0 = getelementptr i32, i32* %src, i64 %idx
+    ret i32* %0
+@llvm
+def _get_elem_value_64(src: ptr[u32], idx: i64) -> u64:
+    %0 = getelementptr i32, i32* %src, i64 %idx
+    %1 = bitcast i32* %0 to i64*
+    %2 = load i64, i64* %1
+    ret i64 %2
+@llvm
+def _get_elem_value_128(src: ptr[u32], idx: i64) -> u128:
+    %0 = getelementptr i32, i32* %src, i64 %idx
+    %1 = bitcast i32* %0 to i128*
+    %2 = load i128, i128* %1
+    ret i128 %2
+@llvm
+def _get_elem_value_192(src: ptr[u32], idx: i64) -> u192:
+    %0 = getelementptr i32, i32* %src, i64 %idx
+    %1 = bitcast i32* %0 to i192*
+    %2 = load i192, i192* %1
+    ret i192 %2
+@llvm
+def _mm_recursion(a: ptr[u32], b: ptr[u32], c: ptr[u32], d: ptr[u32], sse_mask: u128 = SSE_MASK) -> i8:
+    %a_mm_ptr = bitcast i32* %a to <4 x i32>*
+    %a_mm = load <4 x i32>, <4 x i32>* %a_mm_ptr
+    %a_128 = bitcast <4 x i32> %a_mm to i128
+    %b_mm_ptr = bitcast i32* %b to <4 x i32>*
+    %b_mm = load <4 x i32>, <4 x i32>* %b_mm_ptr
+    %c_mm_ptr = bitcast i32* %c to <4 x i32>*
+    %c_mm = load <4 x i32>, <4 x i32>* %c_mm_ptr
+    %d_mm_ptr = bitcast i32* %d to <4 x i32>*
+    %d_mm = load <4 x i32>, <4 x i32>* %d_mm_ptr
+    %a_128_shl = shl i128 %a_128, 1
+    %x = bitcast i128 %a_128_shl to <4 x i32>
+    %sse_2_mask_mm = bitcast i128 %sse_mask to <4 x i32>
+    %y_0 = lshr <4 x i32> %b_mm, < i32 11, i32 11, i32 11, i32 11>
+    %z_0 = lshr <4 x i32> %c_mm, < i32 1, i32 1, i32 1, i32 1>
+    %v = shl <4 x i32> %d_mm, < i32 18, i32 18, i32 18, i32 18>
+    %z_1 = xor <4 x i32> %z_0, %a_mm
+    %z_2 = xor <4 x i32> %z_1, %v
+    %y_1 = and <4 x i32> %y_0, %sse_2_mask_mm
+    %z_3 = xor <4 x i32> %z_2, %x
+    %z_4 = xor <4 x i32> %z_3, %y_1
+    store <4 x i32> %z_4, <4 x i32>* %a_mm_ptr
+    ret i8 0
+
+
+def _gen_rand_all_simd(state: Array[u32]):
+    i = 0
+    r1 = _at(state.ptr, N - 8)
+    r2 = _at(state.ptr, N - 4)
+
+    while i < N_SFMT_POS2:
+        _mm_recursion(_at(state.ptr, i), _at(state.ptr, i + SFMT_POS2), r1, r2)
+        r1 = r2
+        r2 = _at(state.ptr, i)
+        i += 4
+
+    while i < N:
+        _mm_recursion(_at(state.ptr, i), _at(state.ptr, i - N_SFMT_POS2), r1, r2)
+        r1 = r2
+        r2 = _at(state.ptr, i)
+        i += 4
+
 
 # http://www.math.sci.hiroshima-u.ac.jp/~m-mat/MT/MT2002/CODES/mt19937ar.c
 class RandomGenerator:
@@ -75,32 +155,8 @@ class RandomGenerator:
 
         generates a random number on [0,0xffffffff]-interval
         """
-        MATRIX_A = u32(0x9908b0df)
-        UPPER_MASK = u32(0x80000000)
-        LOWER_MASK = u32(0x7fffffff)
-        mag01 = __array__[u32](2)
-        mag01[0] = u32(0)
-        mag01[1] = MATRIX_A
-
         if self.next >= N:
-            if self.next == N+1:
-                self.init_genrand(u32(5489))
-
-            mt = self.state
-            kk = 0
-
-            while kk < N - M:
-                y = (mt[kk] & UPPER_MASK) | (mt[kk+1] & LOWER_MASK)
-                mt[kk] = mt[kk+M] ^ (y >> u32(1)) ^ mag01[int(y & u32(1))]
-                kk += 1
-
-            while kk < N - 1:
-                y = (mt[kk] & UPPER_MASK) | (mt[kk+1] & LOWER_MASK)
-                mt[kk] = mt[kk+(M-N)] ^ (y >> u32(1)) ^ mag01[int(y & u32(1))]
-                kk += 1
-
-            y = (mt[N-1] & UPPER_MASK) | (mt[0] & LOWER_MASK)
-            mt[N-1] = mt[M-1] ^ (y >> u32(1)) ^ mag01[int(y & u32(1))]
+            _gen_rand_all_simd(self.state)
             self.next = 0
 
         y = self.state[self.next]
@@ -111,6 +167,45 @@ class RandomGenerator:
         y ^= (y << u32(7)) & u32(0x9d2c5680)
         y ^= (y << u32(15)) & u32(0xefc60000)
         y ^= (y >> u32(18))
+
+        return y
+
+    def genrand_int64(self) -> u64:
+        """
+        TODO: Generalize to UInt[N]
+        """
+        if self.next > N_2:
+            _gen_rand_all_simd(self.state)
+            self.next = 0
+
+        y = _get_elem_value_64(self.state.ptr, self.next)
+        self.next += 2
+
+        return y
+
+    def genrand_int128(self) -> u128:
+        """
+        TODO: Generalize to UInt[N]
+        """
+        if self.next > N_4:
+            _gen_rand_all_simd(self.state)
+            self.next = 0
+
+        y = _get_elem_value_128(self.state.ptr, self.next)
+        self.next += 4
+
+        return y
+    
+    def genrand_int192(self) -> u192:
+        """
+        TODO: Generalize to UInt[N]
+        """
+        if self.next > N_6:
+            _gen_rand_all_simd(self.state)
+            self.next = 0
+
+        y = _get_elem_value_192(self.state.ptr, self.next)
+        self.next += 6
 
         return y
 
@@ -140,7 +235,6 @@ class RandomGenerator:
         key[4] = u32(now >> u32(32))
 
         self.init_by_array(key, len(key))
-
 
     def seed(self):
         """
@@ -205,31 +299,47 @@ class Random:
             n <<= 8
             n |= int(b[x])
         return n
-
+    
+    def getrandbits_128(self, k: int) -> u128:
+        """
+        TODO: Generalize to UInt[N]
+        """
+        return self.gen.genrand_int128() >> u128(128 - k)
+    
+    def getrandbits_192(self, k: int) -> u192:
+        """
+        TODO: Generalize to UInt[N]
+        """
+        return self.gen.genrand_int192() >> u192(192 - k)
+    
+    def from_u32s_big(self, u32s, count) -> int:
+        """
+        Return the integer represented by the given array of u32 ints.
+        """
+        n = 0
+        for i in range(count):
+            n <<= 32
+            n |= int(u32s[i])
+        return n
+    
     def getrandbits(self, k: int) -> int:
         """
         getrandbits(k) -> x
         Generates an int with k random bits.
         """
+        assert k <= 64, f"Random bits generator: Bitlen should be less than 65. Bitlen: {k}"
 
-        if k <= 32:     # Fast path
-            r = int(self.gen.genrand_int32())
-            m = r >> (32 - k)
-            return m
+        word_lo = self.gen.genrand_int32()
+        word_hi = u32(0)
+        if k > 32: word_hi = self.gen.genrand_int32() >> u32(64 - k)
+        else: word_lo >>= u32(32 - k)
 
-        words = (k - 1) // 32 + 1
-        assert words <= 4
-        wordarray = __array__[u32](4)
-        for i in range(words):
-            r = int(self.gen.genrand_int32())
-            if k < 32: r >>= (32 - k)
-            wordarray[i] = u32(r)
-            k -= 32
-
-        return self.from_bytes_big(wordarray.slice(0, words))
+        return (int(word_hi) << 32) | int(word_lo)
 
     def bit_length(self, n: int) -> int:
         """
+        Inefficient way.
+        TODO: Implement a faster approach: https://graphics.stanford.edu/~seander/bithacks.html#IntegerLog
         """
         len = 0
         while n:
@@ -648,6 +758,12 @@ def seed(a: int):
     _gen.init_genrand(u32(a))
 
 seed(int(_time()))
+
+def getrandbits_intn[TP](k: int):
+    # TODO: #187 Generalize to UInt[N]
+    if isinstance(TP, u128): return _rnd.getrandbits_128(k)
+    if isinstance(TP, u192): return _rnd.getrandbits_192(k)
+    raise TypeError("Random library can generate only 32-bit, 64-bit, 128-bit and 192-bit integers")
 
 def getrandbits(k: int):
     return _rnd.getrandbits(k)
