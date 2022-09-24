@@ -42,6 +42,8 @@ shared_ptr<peg::Grammar> initParser() {
     x.second.accept(v);
   }
   (*g)["program"].enablePackratParsing = true;
+  (*g)["fstring"].enablePackratParsing = true;
+
   for (auto &rule : vector<string>{"arguments", "slices", "genexp", "parentheses",
                                    "star_parens", "generics", "with_parens_item",
                                    "params", "from_as_parens", "from_params"}) {
@@ -99,6 +101,9 @@ ExprPtr parseExpr(const shared_ptr<Cache> &cache, const string &code,
 }
 
 StmtPtr parseFile(const shared_ptr<Cache> &cache, const string &file) {
+  using namespace std::chrono;
+  auto t = high_resolution_clock::now();
+
   vector<string> lines;
   string code;
   if (file == "-") {
@@ -122,6 +127,7 @@ StmtPtr parseFile(const shared_ptr<Cache> &cache, const string &file) {
   // LOG("peg/{} :=  {}", file, result ? result->toString(0) : "<nullptr>");
   // throw;
   // LOG("fmt := {}", FormatVisitor::apply(result));
+  LOG_TIME("   {} -> {:.2f}", file.substr(38), double(duration_cast<milliseconds>(high_resolution_clock::now() - t).count())/1000);
   return result;
 }
 

@@ -74,3 +74,4 @@ gtest_parallel.py
 # Sequre (temp) #
 ######################
 stdlib/sequre
+llvm-project

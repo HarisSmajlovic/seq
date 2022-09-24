@@ -1317,12 +1317,16 @@ void SimplifyVisitor::transformNewImport(const ImportFile &file) {
   ictx->moduleName = file;
   auto import = ctx->cache->imports.insert({file.path, {file.path, ictx}}).first;
   // __name__ = <import name> (set the Python's __name__ variable)
+
+  using namespace std::chrono;
+  auto t = high_resolution_clock::now();
   auto sn =
       SimplifyVisitor(ictx, preamble)
           .transform(N<SuiteStmt>(N<AssignStmt>(N<IdExpr>("__name__"),
                                                 N<StringExpr>(ictx->moduleName.module),
                                                 N<IdExpr>("str"), true),
                                   parseFile(ctx->cache, file.path)));
+  LOG_TIME("{:05.2f} :: {}", double(duration_cast<milliseconds>(high_resolution_clock::now() - t).count())/1000, file.path.substr(38));
 
   // If we are loading standard library, we won't wrap imports in functions as we
   // assume that standard library has no recursive imports. We will just append the

@@ -270,6 +270,13 @@ void LLVMVisitor::process(const Node *x) {
 }
 
 void LLVMVisitor::verify() {
+  auto fo = fopen("_dump.ll", "w");
+  std::string s;
+  llvm::raw_string_ostream os(s);
+  os<<*(getModule());
+  os.flush();
+  fmt::print(fo, "{}\n", s);
+  fclose(fo);
   const bool broken = llvm::verifyModule(*module, &llvm::errs());
   seqassert(!broken, "module broken");
 }
