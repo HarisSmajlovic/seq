@@ -73,15 +73,6 @@ def _mm_recursion(a: ptr[u32], b: ptr[u32], c: ptr[u32], d: ptr[u32], sse_mask: 
     ret i8 0
 
 
-def _decompose_u32(n: u32) -> list[byte]:
-    byte_arr = list[byte](4)
-
-    for _ in range(4):
-        byte_arr.append(byte(n))
-        n >>= 8
-    
-    return byte_arr
-
 def _gen_rand_all_simd(state: Array[u32]):
     i = 0
     r1 = _at(state.ptr, N - 8)
@@ -353,20 +344,18 @@ class Random:
         assert not k & 3, "Random bytes generator: Number of bytes (k) should be divisible by 4. Provided k: {k}"
 
         bs = list[byte](k)
-        for _ in range(k >> 2): bs.extend(_decompose_u32(self.gen.genrand_int32()))
+        for _ in range(k >> 2):
+            new_rand_i32 = self.gen.genrand_int32()
+            bs.extend(list(array(__ptr__(new_rand_i32).as_byte(), 4), 4))
         
         return bs
 
+    @llvm
     def bit_length(self, n: int) -> int:
-        """
-        Inefficient way.
-        TODO: Implement a faster approach: https://graphics.stanford.edu/~seander/bithacks.html#IntegerLog
-        """
-        len = 0
-        while n:
-            len += 1
-            n = int(u64(n) >> u64(1))
-        return len
+        declare i64 @llvm.ctlz.i64(i64, i1)
+        %0 = call i64 @llvm.ctlz.i64(i64 %n, i1 0)
+        %1 = sub i64 64, %0
+        ret i64 %1
 
     def _randbelow_with_getrandbits(self, n: int) -> int:
         """
