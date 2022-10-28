@@ -1,5 +1,8 @@
 from internal.attributes import commutative, associative, distributive
 
+from C import memcpy(cobj, cobj, int)
+
+
 def check_N(N: Static[int]):
     if N <= 0:
         compile_error("N must be greater than 0")
@@ -180,7 +183,7 @@ class Int:
         %0 = xor i{=N} %self, %other
         ret i{=N} %0
     @llvm
-    def __pickle__(self, dest: Ptr[byte]) -> void:
+    def pickle_pasteurized(self, dest: Ptr[byte]) -> void:
         declare i32 @gzwrite(i8*, i8*, i32)
         %0 = alloca i{=N}
         store i{=N} %self, i{=N}* %0
@@ -190,7 +193,7 @@ class Int:
         %2 = call i32 @gzwrite(i8* %dest, i8* %1, i32 %szi)
         ret void
     @llvm
-    def __unpickle__(src: Ptr[byte]) -> Int[N]:
+    def unpickle_pasteurized(src: Ptr[byte]) -> Int[N]:
         declare i32 @gzread(i8*, i8*, i32)
         %0 = alloca i{=N}
         %1 = bitcast i{=N}* %0 to i8*
@@ -199,6 +202,19 @@ class Int:
         %2 = call i32 @gzread(i8* %src, i8* %1, i32 %szi)
         %3 = load i{=N}, i{=N}* %0
         ret i{=N} %3
+    def __pickle__(self: Int[N], jar: Ptr[byte], pasteurized: bool = True):
+        if pasteurized: self.pickle_pasteurized(jar)
+        else:
+            sz = (N + 7) // 8
+            memcpy(jar, __ptr__(self).as_byte(), sz)
+            jar += sz
+    def __unpickle__(jar: Ptr[byte], pasteurized: bool = True) -> Int[N]:
+        if pasteurized: return Int[N].unpickle_pasteurized(jar)
+        else:
+            sz = (N + 7) // 8
+            val = ptr[Int[N]](jar)[0]
+            jar += sz
+            return val
     def __str__(self) -> str:
         return seq_str_int(int(self))
     @pure
@@ -376,7 +392,7 @@ class UInt:
         %0 = xor i{=N} %self, %other
         ret i{=N} %0
     @llvm
-    def __pickle__(self, dest: Ptr[byte]) -> void:
+    def pickle_pasteurized(self, dest: Ptr[byte]) -> void:
         declare i32 @gzwrite(i8*, i8*, i32)
         %0 = alloca i{=N}
         store i{=N} %self, i{=N}* %0
@@ -386,7 +402,7 @@ class UInt:
         %2 = call i32 @gzwrite(i8* %dest, i8* %1, i32 %szi)
         ret void
     @llvm
-    def __unpickle__(src: Ptr[byte]) -> UInt[N]:
+    def unpickle_pasteurized(src: Ptr[byte]) -> UInt[N]:
         declare i32 @gzread(i8*, i8*, i32)
         %0 = alloca i{=N}
         %1 = bitcast i{=N}* %0 to i8*
@@ -395,6 +411,19 @@ class UInt:
         %2 = call i32 @gzread(i8* %src, i8* %1, i32 %szi)
         %3 = load i{=N}, i{=N}* %0
         ret i{=N} %3
+    def __pickle__(self: UInt[N], jar: Ptr[byte], pasteurized: bool = True):
+        if pasteurized: self.pickle_pasteurized(jar)
+        else:
+            sz = (N + 7) // 8
+            memcpy(jar, __ptr__(self).as_byte(), sz)
+            jar += sz
+    def __unpickle__(jar: Ptr[byte], pasteurized: bool = True) -> UInt[N]:
+        if pasteurized: return UInt[N].unpickle_pasteurized(jar)
+        else:
+            sz = (N + 7) // 8
+            val = ptr[UInt[N]](jar)[0]
+            jar += sz
+            return val
     def __str__(self) -> str:
         return seq_str_uint(int(self))
     def popcnt(self):

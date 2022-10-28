@@ -225,11 +225,11 @@ class Kmer:
             i -= 1
         return str(p, k)
 
-    def __pickle__(self, jar: Jar):
-        self.x.__pickle__(jar)
+    def __pickle__(self, jar: Jar, pasteurized: bool = True):
+        self.x.__pickle__(jar, pasteurized)
 
-    def __unpickle__(jar: Jar):
-        return Kmer[k](UInt[2*k].__unpickle__(jar))
+    def __unpickle__(jar: Jar, pasteurized: bool = True):
+        return Kmer[k](UInt[2*k].__unpickle__(jar, pasteurized))
 
     def len():
         return k

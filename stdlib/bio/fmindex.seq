@@ -60,7 +60,7 @@ def _pickle_ptr[T](p: Ptr[T], n: int, jar: Jar):
 
 def _unpickle_ptr[T](jar: Jar):
     from pickle import _read_raw
-    n = unpickle(jar, int)
+    n = unpickle(jar, T=int)
     p = Ptr[T](n)
     _read_raw(jar, p.as_byte(), n * sizeof(T))
     return (p, n)
@@ -76,15 +76,15 @@ class bntseq:
     _anns: Optional[List[bntann]]
     _ambs: Optional[List[bntamb]]
 
-    def __pickle__(self, jar: Jar):
+    def __pickle__(self, jar: Jar, pasteurized_dummy):
         pac_size = (self._l_pac // 4) + (0 if self._l_pac % 4 == 0 else 1)
         _pickle_ptr(self._pac, pac_size, jar)
         pickle((self._l_pac, self._n_seqs, self._anns, self._ambs), jar)
 
-    def __unpickle__(jar: Jar):
+    def __unpickle__(jar: Jar, pasteurized_dummy):
         b = bntseq()
         pac, _ = _unpickle_ptr(jar, u8)
-        l_pac, n_seqs, anns, ambs = unpickle(jar, Tuple[int, int, List[bntann], List[bntamb]])
+        l_pac, n_seqs, anns, ambs = unpickle(jar, T=Tuple[int, int, List[bntann], List[bntamb]])
         b._pac = pac
         b._m_pac = l_pac
         b._l_pac = l_pac
@@ -520,7 +520,7 @@ class FMDIndex:
     _sa_intv: int
     _bntseq: Optional[bntseq]
 
-    def __pickle__(self, jar: Jar):
+    def __pickle__(self, jar: Jar, pasteurized_dummy):
         pickle(self._seq_len, jar)
         pickle(self._primary, jar)
         pickle(self._sa_intv, jar)
@@ -530,16 +530,16 @@ class FMDIndex:
         _pickle_ptr(self._cnt_table, 256, jar)
         pickle(self._bntseq, jar)
 
-    def __unpickle__(jar: Jar):
+    def __unpickle__(jar: Jar, pasteurized: bool = True):
         fmi = FMDIndex()
-        seq_len = unpickle(jar, int)
-        primary = unpickle(jar, int)
-        sa_intv = unpickle(jar, int)
+        seq_len = unpickle(jar, T=int)
+        primary = unpickle(jar, T=int)
+        sa_intv = unpickle(jar, T=int)
         bwt, bwt_size = _unpickle_ptr(jar, u32)
         sa, n_sa = _unpickle_ptr(jar, int)
         L2, _ = _unpickle_ptr(jar, int)
         cnt_table, _ = _unpickle_ptr(jar, u32)
-        b = unpickle(jar, bntseq)
+        b = unpickle(jar, T=bntseq)
 
         fmi._seq_len = seq_len
         fmi._bwt_size = bwt_size
@@ -1131,22 +1131,22 @@ class FMIndex:
     _FMD: bool
     _bntseq: Optional[bntseq]
 
-    def __pickle__(self, jar: Jar):
+    def __pickle__(self, jar: Jar, pasteurized_dummy):
         if not self._bntseq:
             raise ValueError("can only pickle FASTA-based FM-index")
         pickle(self._primary, jar)
         _pickle_ptr(self._bwt, self._bwt_size, jar)
         _pickle_ptr(self._occ, self._n_occ, jar)
-        _pickle_ptr(self._sa, (2 if self._FMD else 1)*self._seq_len + 1, jar)
-        _pickle_ptr(self._sa_hi, int(bool(self._sa_hi))*((2 if self._FMD else 1)*self._seq_len + 1), jar)
+        _pickle_ptr(self._sa, (2 if self._FMD else 1)*self._seq_len + 1, jar, pasteurized)
+        _pickle_ptr(self._sa_hi, int(bool(self._sa_hi))*((2 if self._FMD else 1)*self._seq_len + 1), jar, pasteurized)
         _pickle_ptr(self._L2, 5, jar)
         _pickle_ptr(self._cnt_table, 256, jar)
         pickle(self._FMD, jar)
         pickle(self._bntseq, jar)
 
-    def __unpickle__(jar: Jar):
+    def __unpickle__(jar: Jar, pasteurized_dummy):
         fmi = FMIndex()
-        primary = unpickle(jar, int)
+        primary = unpickle(jar, T=int)
         bwt, bwt_size = _unpickle_ptr(jar, u32)
         occ, n_occ = _unpickle_ptr(jar, int)
         sa, seq_len_p1 = _unpickle_ptr(jar, u32)
@@ -1154,8 +1154,8 @@ class FMIndex:
         seq_len = seq_len_p1 - 1
         L2, _ = _unpickle_ptr(jar, int)
         cnt_table, _ = _unpickle_ptr(jar, u32)
-        FMD = unpickle(jar, bool)
-        b = unpickle(jar, bntseq)
+        FMD = unpickle(jar, T=bool)
+        b = unpickle(jar, T=bntseq)
 
         fmi._seq_len = seq_len
         fmi._bwt_size = bwt_size
