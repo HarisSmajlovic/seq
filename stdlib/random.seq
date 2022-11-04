@@ -50,7 +50,7 @@ def _get_elem_value_192(src: ptr[u32], idx: i64) -> u192:
     %2 = load i192, i192* %1
     ret i192 %2
 @llvm
-def _get_elem_value_512(src: ptr[u32], idx: i64) -> u192:
+def _get_elem_value_512(src: ptr[u32], idx: i64) -> u512:
     %0 = getelementptr i32, i32* %src, i64 %idx
     %1 = bitcast i32* %0 to i512*
     %2 = load i512, i512* %1
