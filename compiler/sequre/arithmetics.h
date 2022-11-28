@@ -13,6 +13,7 @@ class ArithmeticsOptimizations : public ir::transform::OperatorPass {
 
   void applyBeaverOptimizations(ir::CallInstr *);
   void applyPolynomialOptimizations(ir::CallInstr *);
+  void applyFactorizationOptimizations(ir::CallInstr *);
   void applyOptimizations(ir::CallInstr *);
 };
 
