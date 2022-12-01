@@ -10,6 +10,7 @@ namespace seq {
 using namespace ir;
 
 const std::string secureContainerTypeName = "SharedTensor";
+const std::string builtinModule = "std.internal.builtin";
 
 /*
  * Binary expression tree
@@ -17,8 +18,10 @@ const std::string secureContainerTypeName = "SharedTensor";
 const int BET_ADD_OP = 1;
 const int BET_MUL_OP = 2;
 const int BET_POW_OP = 3;
-const int BET_REVEAL_OP = 4;
-const int BET_OTHER_OP = 5;
+const int BET_MATMUL_OP = 4;
+const int BET_REVEAL_OP = 5;
+const int BET_OTHER_OP = 6;
+const int BET_ARITHMETICS_OP_THRESHOLD = BET_REVEAL_OP;
 
 class BETNode {
   int64_t value;
@@ -34,8 +37,8 @@ public:
   BETNode();
   BETNode(Var *variable);
   BETNode(Var *variable, int op, bool expanded, int64_t value, bool constant);
-  BETNode(Var *variable, int op, BETNode *leftChild, BETNode *rightChild,
-          bool expanded, int64_t value, bool constant);
+  BETNode(Var *variable, int op, BETNode *leftChild, BETNode *rightChild, bool expanded,
+          int64_t value, bool constant);
   ~BETNode() {
     if (leftChild)
       delete leftChild;
@@ -47,8 +50,10 @@ public:
   void setOperator(int op) { this->op = op; }
   void setLeftChild(BETNode *leftChild) { this->leftChild = leftChild; }
   void setRightChild(BETNode *rightChild) { this->rightChild = rightChild; }
+  void swapChildren() { std::swap(leftChild, rightChild); }
   void setExpanded() { expanded = true; }
   Var *getVariable() const { return variable; }
+  VarValue *getVarValue(Module *) const;
   int getVariableId() const { return variable ? variable->getId() : 0; }
   int getOperator() const { return op; }
   int64_t getValue() const { return value; }
@@ -60,7 +65,10 @@ public:
   bool isMul() const { return op == BET_MUL_OP; }
   bool isPow() const { return op == BET_POW_OP; }
   bool isConstant() const { return constant; }
-  bool isSameLeaf(BETNode *) const;
+  bool isSameSubTree(BETNode *) const;
+  bool isElemWiseOp() const { return isAdd() || isMul(); }
+  bool isMatmul() const { return op == BET_MATMUL_OP; }
+  bool hasAtomicType() { return getType()->isAtomic(); }
   void replace(BETNode *);
   BETNode *copy() const;
   void print(int) const;
@@ -70,33 +78,70 @@ public:
 };
 
 BETNode::BETNode()
-    : value(1), variable(nullptr), nodeType(nullptr), op(0), leftChild(nullptr), rightChild(nullptr),
-      expanded(false), constant(false) {}
+    : value(1), variable(nullptr), nodeType(nullptr), op(0), leftChild(nullptr),
+      rightChild(nullptr), expanded(false), constant(false) {}
 
 BETNode::BETNode(Var *variable)
     : value(1), variable(variable), op(0), leftChild(nullptr), rightChild(nullptr),
-      expanded(false), constant(false) { if (variable) nodeType = variable->getType(); else nodeType = nullptr; }
+      expanded(false), constant(false) {
+  if (variable)
+    nodeType = variable->getType();
+  else
+    nodeType = nullptr;
+}
 
 BETNode::BETNode(Var *variable, int op, bool expanded, int64_t value, bool constant)
-    : value(value), variable(variable), op(op), leftChild(nullptr),
-      rightChild(nullptr), expanded(expanded), constant(constant) { if (variable) nodeType = variable->getType(); else nodeType = nullptr; }
+    : value(value), variable(variable), op(op), leftChild(nullptr), rightChild(nullptr),
+      expanded(expanded), constant(constant) {
+  if (variable)
+    nodeType = variable->getType();
+  else
+    nodeType = nullptr;
+}
 
 BETNode::BETNode(Var *variable, int op, BETNode *leftChild, BETNode *rightChild,
                  bool expanded, int64_t value, bool constant)
     : value(value), variable(variable), op(op), leftChild(leftChild),
-      rightChild(rightChild), expanded(expanded), constant(constant) { if (variable) nodeType = variable->getType(); else nodeType = nullptr; }
+      rightChild(rightChild), expanded(expanded), constant(constant) {
+  if (variable)
+    nodeType = variable->getType();
+  else
+    nodeType = nullptr;
+}
 
-bool BETNode::isSameLeaf(BETNode *other) const {
+VarValue *BETNode::getVarValue(Module *M) const {
+  auto *var = getVariable();
+  assert(var);
+  auto *arg = M->Nr<VarValue>(var);
+  assert(arg);
+  return arg;
+}
+
+bool BETNode::isSameSubTree(BETNode *other) const {
   if (isLeaf() && other->isLeaf()) {
     if (isConstant() && other->isConstant())
       return getValue() == other->getValue();
-    
-    assert(variable && "BET leaf is neither constant nor variable. (This is internal bug within IR optimizations. Please report it to code owners.)");
+
+    assert(variable &&
+           "BET leaf is neither constant nor variable. (This is internal bug within IR "
+           "optimizations. Please report it to code owners.)");
 
     int varId = getVariableId();
-    int otherVarId = getVariableId();
+    int otherVarId = other->getVariableId();
     if (varId && otherVarId)
       return varId == otherVarId;
+  } else if (!isLeaf() && !other->isLeaf()) {
+    if (getOperator() != other->getOperator())
+      return false;
+
+    if (getLeftChild()->isSameSubTree(other->getLeftChild()) &&
+        getRightChild()->isSameSubTree(other->getRightChild()))
+      return true;
+
+    if (isMul() || isAdd())
+      if (getLeftChild()->isSameSubTree(other->getRightChild()) &&
+          getRightChild()->isSameSubTree(other->getLeftChild()))
+        return true;
   }
 
   return false;
@@ -124,12 +169,12 @@ BETNode *BETNode::copy() const {
 }
 
 void BETNode::print(int level = 0) const {
-  for (int i=0; i < level; ++i)
+  for (int i = 0; i < level; ++i)
     std::cout << "    ";
-  
+
   std::cout << op << " " << getVariableId()
             << (constant ? " Is constant " : " Not constant ") << value << std::endl;
-  
+
   if (leftChild)
     leftChild->print(level + 1);
   if (rightChild)
@@ -145,15 +190,18 @@ types::Type *BETNode::getType() {
     else
       nodeType = getLeftChild()->getType();
   }
-  
+
   assert(nodeType);
   return nodeType;
 };
 
 std::string const BETNode::getOperatorIRName() const {
-  if (isAdd()) return "__add__";
-  if (isMul()) return "__mul__";
-  if (isPow()) return "__pow__";
+  if (isAdd())
+    return "__add__";
+  if (isMul())
+    return "__mul__";
+  if (isPow())
+    return "__pow__";
   assert(false && "BET node operator not supported in IR optimizations.");
 };
 
@@ -183,7 +231,7 @@ public:
   BETNode *root();
   BETNode *polyRoot() const;
   BETNode *getNextPolyNode();
-  std::vector<BETNode*> generateFactorizationTrees(int);
+  std::vector<BETNode *> generateFactorizationTrees(int);
   std::vector<int64_t> extractCoefficents(BETNode *) const;
   std::vector<int64_t> extractExponents(BETNode *) const;
   std::set<int> extractVars(BETNode *) const;
@@ -201,7 +249,11 @@ private:
   void expandNode(BETNode *);
   void expandPow(BETNode *);
   void expandMul(BETNode *);
-  void collapseMul(BETNode *);
+  void expandMatmul(BETNode *);
+  void expandDistributive(BETNode *, int, int);
+  void collapseDistributive(BETNode *, bool, bool, bool, bool, int, int);
+  void collapseMul(BETNode *, bool, bool, bool, bool);
+  void collapseMatmul(BETNode *, bool, bool, bool, bool);
   void formPolynomial(BETNode *);
   void extractCoefficents(BETNode *, std::vector<int64_t> &) const;
   void extractExponents(BETNode *, std::vector<int64_t> &) const;
@@ -266,7 +318,8 @@ void BET::expandPow(BETNode *betNode) {
   }
 }
 
-void BET::expandMul(BETNode *betNode) {
+void BET::expandDistributive(BETNode *betNode, int weakOp, int strongOp) {
+  assert(weakOp < strongOp);
   treeAltered = true;
 
   auto *lc = betNode->getLeftChild();
@@ -274,19 +327,32 @@ void BET::expandMul(BETNode *betNode) {
 
   auto *addNode = lc->isAdd() ? lc : rc;
   auto *otherNode = lc->isAdd() ? rc : lc;
-  betNode->setOperator(BET_ADD_OP);
-  addNode->setOperator(BET_MUL_OP);
-  auto *newMulNode =
-      new BETNode(nullptr, BET_MUL_OP, addNode->getRightChild(), otherNode, true, 1, false);
-  if (lc == otherNode)
+  betNode->setOperator(weakOp);
+  addNode->setOperator(strongOp);
+  auto *newMulNode = new BETNode(nullptr, strongOp, addNode->getRightChild(),
+                                 otherNode, true, 1, false);
+  addNode->setRightChild(otherNode->copy());
+  
+  if (lc == otherNode) {
+    newMulNode->swapChildren();
+    addNode->swapChildren();
     betNode->setLeftChild(newMulNode);
+  }
   if (rc == otherNode)
     betNode->setRightChild(newMulNode);
-  addNode->setRightChild(otherNode->copy());
 }
 
-void BET::collapseMul(BETNode *betNode) {
-  treeAltered = true;
+void BET::expandMul(BETNode *betNode) {
+  expandDistributive(betNode, BET_ADD_OP, BET_MUL_OP);
+}
+
+void BET::expandMatmul(BETNode *betNode) {
+  expandDistributive(betNode, BET_ADD_OP, BET_MATMUL_OP);
+}
+
+void BET::collapseDistributive(BETNode *betNode, bool llc_lrc, bool llc_rrc, bool rlc_lrc,
+                      bool rlc_rrc, int weakOp, int strongOp) {
+  assert(weakOp < strongOp);
 
   auto *lc = betNode->getLeftChild();
   auto *rc = betNode->getRightChild();
@@ -295,36 +361,50 @@ void BET::collapseMul(BETNode *betNode) {
   auto *rlc = lc->getRightChild();
   auto *lrc = rc->getLeftChild();
   auto *rrc = rc->getRightChild();
-  
-  BETNode *collapseNode;
-  BETNode *otherNode1, *otherNode2;
 
-  if (llc->isSameLeaf(lrc)) {
+  BETNode *collapseNode;
+  BETNode *leftOtherNode, *rightOtherNode;
+
+  if (llc_lrc) {
     collapseNode = llc;
-    otherNode1 = rlc;
-    otherNode2 = rrc;
-  } else if (llc->isSameLeaf(rrc)) {
+    leftOtherNode = rlc;
+    rightOtherNode = rrc;
+  } else if (rlc_rrc) {
+    collapseNode = rlc;
+    leftOtherNode = llc;
+    rightOtherNode = lrc;
+  } else if (llc_rrc) {
     collapseNode = llc;
-    otherNode1 = rlc;
-    otherNode2 = lrc;
-  } else if (rlc->isSameLeaf(lrc)) {
+    leftOtherNode = rlc;
+    rightOtherNode = lrc;
+  } else if (rlc_lrc) {
     collapseNode = rlc;
-    otherNode1 = llc;
-    otherNode2 = rrc;
-  } else if (rlc->isSameLeaf(rrc)) {
-    collapseNode = rlc;
-    otherNode1 = llc;
-    otherNode2 = lrc;
-  } else {
-    throw 1; // TODO: Remove after isSameLeaf is replaced with isSameSubTree
-  }
-  
-  betNode->setOperator(BET_MUL_OP);
-  lc->setOperator(BET_ADD_OP);
-  lc->setLeftChild(otherNode1);
-  lc->setRightChild(otherNode2);
-  
-  rc->replace(collapseNode);
+    leftOtherNode = llc;
+    rightOtherNode = rrc;
+  } else assert(false && "Non-reducible expression cannot be collapsed.");
+
+  treeAltered = true;
+
+  BETNode *surviveNode = llc_lrc ? rc : lc;
+  BETNode *replaceNode = llc_lrc ? lc : rc;
+
+  betNode->setOperator(strongOp);
+  surviveNode->setOperator(weakOp);
+  surviveNode->setLeftChild(leftOtherNode);
+  surviveNode->setRightChild(rightOtherNode);
+
+  replaceNode->replace(collapseNode);
+}
+
+void BET::collapseMul(BETNode *betNode, bool llc_lrc, bool llc_rrc, bool rlc_lrc,
+                      bool rlc_rrc) {
+  collapseDistributive(betNode, llc_lrc, llc_rrc, rlc_lrc, rlc_rrc, BET_ADD_OP, BET_MUL_OP);
+}
+
+void BET::collapseMatmul(BETNode *betNode, bool llc_lrc, bool llc_rrc, bool rlc_lrc,
+                      bool rlc_rrc) {
+  assert(llc_lrc || rlc_rrc);
+  collapseDistributive(betNode, llc_lrc, llc_rrc, rlc_lrc, rlc_rrc, BET_ADD_OP, BET_MATMUL_OP);
 }
 
 void BET::formPolynomial(BETNode *betNode) {
@@ -347,7 +427,8 @@ void BET::formPolynomial(BETNode *betNode) {
   expandMul(betNode);
 }
 
-void BET::extractCoefficents(BETNode *betNode, std::vector<int64_t> &coefficients) const {
+void BET::extractCoefficents(BETNode *betNode,
+                             std::vector<int64_t> &coefficients) const {
   if (!(betNode->isAdd())) {
     coefficients.push_back(parseCoefficient(betNode));
     return;
@@ -383,14 +464,15 @@ void BET::extractVars(BETNode *betNode, std::set<int> &vars) const {
     vars.insert(betNode->getVariableId());
     return;
   }
-    
+
   auto *lc = betNode->getLeftChild();
   auto *rc = betNode->getRightChild();
   extractVars(lc, vars);
   extractVars(rc, vars);
 }
 
-void BET::parseExponents(BETNode *betNode, std::map<int, int64_t> &termExponents) const {
+void BET::parseExponents(BETNode *betNode,
+                         std::map<int, int64_t> &termExponents) const {
   if (betNode->isConstant())
     return;
   if (betNode->isLeaf()) {
@@ -479,7 +561,7 @@ std::vector<int64_t> BET::getPascalRow(int64_t n) {
   return pascalMatrix[n];
 }
 
-void BET::addRoot(Var* newVar, int oldVarId) {
+void BET::addRoot(Var *newVar, int oldVarId) {
   auto *oldNode = roots[oldVarId]->copy();
   oldNode->setVariable(newVar);
   roots[oldNode->getVariableId()] = oldNode;
@@ -564,7 +646,7 @@ std::set<int> BET::extractVars(BETNode *betNode) const {
 void BET::escapePows(BETNode *node) {
   if (node->isLeaf())
     return;
-  
+
   if (!node->isPow()) {
     escapePows(node->getLeftChild());
     escapePows(node->getRightChild());
@@ -584,21 +666,23 @@ void BET::escapePows(BETNode *node) {
   if (rc->getValue() == 1)
     newMulNode->setRightChild(new BETNode(nullptr, 0, true, 1, true));
 
-  for (int i=0; i < rc->getValue() - 2; ++i)
-    newMulNode = new BETNode(nullptr, BET_MUL_OP, lc, newMulNode->copy(), false, 1, false);
+  for (int i = 0; i < rc->getValue() - 2; ++i)
+    newMulNode =
+        new BETNode(nullptr, BET_MUL_OP, lc, newMulNode->copy(), false, 1, false);
 
   node->replace(newMulNode);
 }
 
-std::vector<BETNode*> BET::generateFactorizationTrees(int upperLimit = 10) {
+std::vector<BETNode *> BET::generateFactorizationTrees(int upperLimit = 10) {
   BETNode *root = this->root()->copy();
   escapePows(root);
   reduceAll(root);
 
-  std::vector<BETNode*> factorizations;
-  for (int i=0; i != upperLimit; ++i) {
+  std::vector<BETNode *> factorizations;
+  for (int i = 0; i != upperLimit; ++i) {
     factorizations.push_back(root->copy());
-    if (!expandLvl(root)) break;
+    if (!expandLvl(root))
+      break;
   }
 
   return factorizations;
@@ -606,18 +690,22 @@ std::vector<BETNode*> BET::generateFactorizationTrees(int upperLimit = 10) {
 
 bool BET::expandLvl(BETNode *node) {
   // TODO: Add support for operators other than + and *
-  
+
   if (node->isLeaf())
     return false;
 
   auto *lc = node->getLeftChild();
   auto *rc = node->getRightChild();
-  if (!node->isMul() || !(lc->isAdd() || rc->isAdd())) {
-    if (expandLvl(lc)) return true;
+  if (!(node->isMul() || node->isMatmul()) || !(lc->isAdd() || rc->isAdd())) {
+    if (expandLvl(lc))
+      return true;
     return expandLvl(rc);
   }
 
-  expandMul(node);
+  if (node->isMul())
+    expandMul(node);
+  if (node->isMatmul())
+    expandMatmul(node);
   return true;
 }
 
@@ -626,44 +714,64 @@ bool BET::reduceLvl(BETNode *node) {
 
   if (node->isLeaf())
     return false;
-  
+
   auto *lc = node->getLeftChild();
   auto *rc = node->getRightChild();
-  bool not_reducible = !node->isAdd() || !(lc->isMul() && rc->isMul());
+  bool atomic_mult = lc->isMul() && rc->isMul();
+  bool matrix_mult = lc->isMatmul() && rc->isMatmul();
+  bool children_multiplicative = atomic_mult || matrix_mult;
+  bool not_reducible = !node->isAdd() || !children_multiplicative;
 
   bool reducible = false;
+  bool llc_lrc = false;
+  bool llc_rrc = false;
+  bool rlc_lrc = false;
+  bool rlc_rrc = false;
 
   if (!lc->isLeaf() && !rc->isLeaf()) {
     auto *llc = lc->getLeftChild();
     auto *rlc = lc->getRightChild();
     auto *lrc = rc->getLeftChild();
     auto *rrc = rc->getRightChild();
-  
-    reducible = llc->isSameLeaf(lrc) || llc->isSameLeaf(rrc) || rlc->isSameLeaf(lrc) || rlc->isSameLeaf(rrc);
+
+    llc_lrc = llc->isSameSubTree(lrc);
+    llc_rrc = llc->isSameSubTree(rrc);
+    rlc_lrc = rlc->isSameSubTree(lrc);
+    rlc_rrc = rlc->isSameSubTree(rrc);
+
+    reducible = llc_lrc || llc_rrc || rlc_lrc || rlc_rrc;
   }
-  
+
   if (not_reducible or !reducible) {
-    if (reduceLvl(lc)) return true;
+    if (reduceLvl(lc))
+      return true;
     return reduceLvl(rc);
   }
 
-  collapseMul(node);
+  if (atomic_mult)
+    collapseMul(node, llc_lrc, llc_rrc, rlc_lrc, rlc_rrc);
+  else if (matrix_mult)
+    collapseMatmul(node, llc_lrc, llc_rrc, rlc_lrc, rlc_rrc);
+  else assert(false);
+  
   return true;
 }
 
 void BET::expandAll(BETNode *root) {
-  while(expandLvl(root));
+  while (expandLvl(root))
+    ;
 }
 
 void BET::reduceAll(BETNode *root) {
-  while(reduceLvl(root));
+  while (reduceLvl(root))
+    ;
 }
 
-bool isArithmetic(int op) { return op && op < 4; }
-bool isReveal(int op) { return op == 4; }
+bool isArithmetic(int op) { return op && op < BET_ARITHMETICS_OP_THRESHOLD; }
+bool isReveal(int op) { return op == BET_REVEAL_OP; }
 
 /*
- * Substitution optimizations
+ * Auxiliary helpers
  */
 
 bool isSequreFunc(Func *f) {
@@ -682,6 +790,14 @@ bool isFactOptFunc(Func *f) {
   return bool(f) && util::hasAttribute(f, "std.sequre.attributes.opt_mat_arth");
 }
 
+Func *getOrRealizeSequreInternalMethod(Module *M, std::string const &methodName,
+                                       std::vector<types::Type *> args,
+                                       std::vector<types::Generic> generics = {}) {
+  auto *sequreInternalType =
+      M->getOrRealizeType("Internal", {}, "std.sequre.stdlib.internal");
+  return M->getOrRealizeMethod(sequreInternalType, methodName, args, generics);
+}
+
 int getOperator(CallInstr *callInstr) {
   auto *f = util::getFunc(callInstr->getCallee());
   auto instrName = f->getName();
@@ -691,6 +807,8 @@ int getOperator(CallInstr *callInstr) {
     return BET_MUL_OP;
   if (instrName.find("__pow__") != std::string::npos)
     return BET_POW_OP;
+  if (instrName.find("matmul") != std::string::npos)
+    return BET_MATMUL_OP;
   if (instrName.find("secure_reveal") != std::string::npos)
     return BET_REVEAL_OP;
   return BET_OTHER_OP;
@@ -702,6 +820,8 @@ types::Type *getTupleType(int n, types::Type *elemType, Module *M) {
     tupleTypes.push_back(elemType);
   return M->getTupleType(tupleTypes);
 }
+
+/* BET tree construction */
 
 BETNode *parseArithmetic(CallInstr *callInstr) {
   // Arithmetics are binary
@@ -718,12 +838,13 @@ BETNode *parseArithmetic(CallInstr *callInstr) {
   auto *rhsConst = cast<IntConst>(rhs);
 
   if (lhsConst)
-    betNode->setLeftChild(new BETNode(cast<Var>(lhs), 0, true, lhsConst->getVal(), true));
+    betNode->setLeftChild(
+        new BETNode(cast<Var>(lhs), 0, true, lhsConst->getVal(), true));
   else if (!lhsInstr) {
     betNode->setLeftChild(new BETNode(lhs->getUsedVariables().front()));
   } else
     betNode->setLeftChild(parseArithmetic(lhsInstr));
-  
+
   if (rhsConst)
     betNode->setRightChild(
         new BETNode(cast<Var>(rhs), 0, true, rhsConst->getVal(), true));
@@ -751,7 +872,7 @@ void parseInstruction(seq::ir::Value *instruction, BET *bet) {
   auto *callInstr = cast<CallInstr>(assIns->getRhs());
   if (!callInstr)
     return;
-  
+
   auto op = getOperator(callInstr);
   if (isArithmetic(op)) {
     auto *betNode = parseArithmetic(callInstr);
@@ -762,6 +883,18 @@ void parseInstruction(seq::ir::Value *instruction, BET *bet) {
     bet->addStopVar(var->getId());
   }
 }
+
+BET *parseBET(SeriesFlow *series) {
+  auto *bet = new BET();
+  for (auto it = series->begin(); it != series->end(); ++it)
+    parseInstruction(*it, bet);
+
+  bet->parseVars(bet->root());
+
+  return bet;
+}
+
+/* Polynomial MPC optimization */
 
 CallInstr *nextPolynomialCall(CallInstr *v, BodiedFunc *bf, BET *bet) {
   auto polyNode = bet->getNextPolyNode();
@@ -803,42 +936,6 @@ CallInstr *nextPolynomialCall(CallInstr *v, BodiedFunc *bf, BET *bet) {
   return util::call(evalPolyFunc, {self, inputArg, coefsArg, expsArg});
 }
 
-Value *generateExpression(Module *M, BETNode *node) {
-  if (node->isLeaf()) {
-    auto *var = node->getVariable();
-    assert(var);
-
-    auto *arg = M->Nr<VarValue>(var);
-    assert(arg);
-
-    return arg;
-  }
-  
-  auto *lc = node->getLeftChild();
-  auto *rc = node->getRightChild();
-  assert(lc);
-  assert(rc);
-
-  auto *lopType = lc->getType();
-  auto *ropType = rc->getType();
-  auto *opFunc = M->getOrRealizeMethod(lopType, node->getOperatorIRName(), {lopType, ropType});
-
-  std::string const errMsg = node->getOperatorIRName() + " not found in type " + lopType->getName();
-  assert(opFunc && errMsg.c_str());
-
-  auto *lop = generateExpression(M, lc);
-  assert(lop);
-  auto *rop = generateExpression(M, rc);
-  assert(rop);
-
-  auto *callIns = util::call(opFunc, {lop, rop});
-  assert(callIns);
-  auto *actualCallIns = callIns->getActual();
-  assert(actualCallIns);
-
-  return actualCallIns;
-}
-
 void convertInstructions(CallInstr *v, BodiedFunc *bf, SeriesFlow *series, BET *bet) {
   auto it = series->begin();
   while (it != series->end()) {
@@ -875,7 +972,161 @@ void convertInstructions(CallInstr *v, BodiedFunc *bf, SeriesFlow *series, BET *
   }
 }
 
-void routeFactorizations(CallInstr *v, BodiedFunc *bf, SeriesFlow *series, std::vector<BETNode*> factorizationTrees) {
+/* Factorization optimizations */
+
+Value *generateExpression(Module *M, BETNode *node) {
+  if (node->isLeaf())
+    return node->getVarValue(M);
+
+  auto *lc = node->getLeftChild();
+  auto *rc = node->getRightChild();
+  assert(lc);
+  assert(rc);
+
+  auto *lopType = lc->getType();
+  auto *ropType = rc->getType();
+  auto *opFunc =
+      M->getOrRealizeMethod(lopType, node->getOperatorIRName(), {lopType, ropType});
+
+  std::string const errMsg =
+      node->getOperatorIRName() + " not found in type " + lopType->getName();
+  assert(opFunc && errMsg.c_str());
+
+  auto *lop = generateExpression(M, lc);
+  assert(lop);
+  auto *rop = generateExpression(M, rc);
+  assert(rop);
+
+  auto *callIns = util::call(opFunc, {lop, rop});
+  assert(callIns);
+  auto *actualCallIns = callIns->getActual();
+  assert(actualCallIns);
+
+  return actualCallIns;
+}
+
+Value *generateProduct(Module *M, std::vector<Value *> factors,
+                       types::Type *returnType) {
+  assert(
+      factors.size() &&
+      "Matrix factorization pass -> Product of shapes: Factors need to be non-empty.");
+
+  if (factors.size() == 1)
+    return factors[0];
+
+  auto *mulFunc =
+      M->getOrRealizeMethod(returnType, "__mul__", {returnType, returnType});
+
+  std::string const errMsg = "__mul__ not found in type " + returnType->getName();
+  assert(mulFunc && errMsg.c_str());
+
+  auto *mulCall = util::call(mulFunc, {factors[0], factors[1]});
+  assert(mulCall);
+
+  for (int i = 2; i < factors.size(); ++i)
+    mulCall = util::call(mulFunc, {mulCall->getActual(), factors[i]});
+
+  auto *actualMulCall = mulCall->getActual();
+  assert(actualMulCall);
+
+  return actualMulCall;
+}
+
+std::vector<Value *> parseOpCosts(Module *M, BETNode *node,
+                                  std::vector<Value *> &opCosts) {
+  if (node->hasAtomicType() || node->isConstant())
+    return {M->getInt(1), M->getInt(1)};
+
+  if (node->isLeaf()) {
+    auto *shapeMethod =
+        M->getOrRealizeMethod(node->getType(), "shape", {node->getType()});
+    if (!shapeMethod)
+      return {M->getInt(1), M->getInt(1)};
+
+    auto *containerType = util::getReturnType(shapeMethod);
+    auto *itemGetterMethod = M->getOrRealizeMethod(containerType, "__getitem__",
+                                                   {containerType, M->getIntType()});
+    assert(itemGetterMethod);
+
+    auto *shapeCall = util::call(shapeMethod, {node->getVarValue(M)});
+    assert(shapeCall);
+    auto *getFirstItemCall =
+        util::call(itemGetterMethod, {shapeCall->getActual(), M->getInt(0)});
+    auto *getSecondItemCall =
+        util::call(itemGetterMethod, {shapeCall->getActual(), M->getInt(-1)});
+    assert(getFirstItemCall);
+    assert(getSecondItemCall);
+
+    return {getFirstItemCall->getActual(), getSecondItemCall->getActual()};
+  }
+
+  std::vector<Value *> shape;
+  if (node->isElemWiseOp()) {
+    shape = parseOpCosts(M, node->getLeftChild(), opCosts);
+    assert(shape.size() == 2);
+  } else if (node->isMatmul()) {
+    auto lshape = parseOpCosts(M, node->getLeftChild(), opCosts);
+    auto rshape = parseOpCosts(M, node->getRightChild(), opCosts);
+    assert(lshape.size() == 2);
+    assert(rshape.size() == 2);
+    shape = {lshape[0], lshape[1], rshape[1]};
+  } else
+    assert(false && "Invalid BET node operation.");
+
+  opCosts.push_back(generateProduct(M, shape, M->getIntType()));
+  if (node->isMatmul())
+    shape.erase(shape.begin() + 1);
+
+  return shape;
+}
+
+Value *generateCostExpression(Module *M, BETNode *factorizationTree) {
+  std::vector<Value *> costProducts;
+  parseOpCosts(M, factorizationTree, costProducts);
+
+  auto *sumMethod = M->getOrRealizeFunc(
+      "sum", {getTupleType(costProducts.size(), M->getIntType(), M)}, {},
+      builtinModule);
+  assert(sumMethod);
+
+  auto *costProductsTuple = util::makeTuple(costProducts, M);
+  auto *callIns = util::call(sumMethod, {costProductsTuple});
+  assert(callIns);
+
+  return callIns->getActual();
+}
+
+CallInstr *callRouter(Module *M, std::vector<Value *> newVars,
+                      std::vector<Value *> costVars) {
+  auto *varsTupleType = getTupleType(newVars.size(), newVars[0]->getType(), M);
+  auto *costsTupleType = getTupleType(costVars.size(), M->getIntType(), M);
+  auto *routerMethod = getOrRealizeSequreInternalMethod(
+      M, "min_cost_router", {varsTupleType, costsTupleType});
+  assert(routerMethod);
+
+  auto *varsTuple = util::makeTuple(newVars, M);
+  auto *costsTuple = util::makeTuple(costVars, M);
+  auto *routerCall = util::call(routerMethod, {varsTuple, costsTuple});
+  assert(routerCall);
+
+  return routerCall;
+}
+
+void routeFactorizations(CallInstr *v, BodiedFunc *bf, SeriesFlow *series,
+                         std::vector<BETNode *> factorizationTrees) {
+  auto *M = v->getModule();
+
+  std::vector<Value *> newVars;
+  // costVars contains the cost calculation expression for each newVar
+  std::vector<Value *> costVars;
+
+  for (auto factorizationTree : factorizationTrees) {
+    newVars.push_back(
+        util::makeVar(generateExpression(M, factorizationTree), series, bf, true));
+    costVars.push_back(
+        util::makeVar(generateCostExpression(M, factorizationTree), series, bf, true));
+  }
+
   auto it = series->begin();
   while (it != series->end()) {
     auto *retIns = cast<ReturnInstr>(*it);
@@ -884,24 +1135,14 @@ void routeFactorizations(CallInstr *v, BodiedFunc *bf, SeriesFlow *series, std::
       continue;
     }
 
-    auto *debugCallVal = generateExpression(v->getModule(), factorizationTrees[0]);
-    assert(debugCallVal);
-    auto *debugCall = cast<CallInstr>(debugCallVal);
-    assert(debugCall);
-    retIns->setValue(debugCall);
+    // TODO: Add support for n1 + n2 + ... + nm case
+    // TODO: Update type-getter to deduce the return type
+    retIns->setValue(callRouter(M, newVars, costVars));
     ++it;
   }
 }
 
-BET* parseBET(SeriesFlow *series) {
-  auto *bet = new BET();
-  for (auto it = series->begin(); it != series->end(); ++it)
-    parseInstruction(*it, bet);
-  
-  bet->parseVars(bet->root());
-
-  return bet;
-}
+/* IR passes */
 
 void ArithmeticsOptimizations::applyFactorizationOptimizations(CallInstr *v) {
   auto *f = util::getFunc(v->getCallee());
@@ -958,7 +1199,7 @@ void ArithmeticsOptimizations::applyBeaverOptimizations(CallInstr *v) {
   auto *rhsType = rhs->getType();
 
   bool isSqrtInv = false;
-  if (isDiv) {  // Special case where 1 / sqrt(x) is called
+  if (isDiv) { // Special case where 1 / sqrt(x) is called
     auto *sqrtInstr = cast<CallInstr>(rhs);
     if (sqrtInstr) {
       auto *sqrtFunc = util::getFunc(sqrtInstr->getCallee());
@@ -967,8 +1208,10 @@ void ArithmeticsOptimizations::applyBeaverOptimizations(CallInstr *v) {
     }
   }
 
-  bool lhs_is_secure_container = lhsType->getName().find(secureContainerTypeName) != std::string::npos;
-  bool rhs_is_secure_container = rhsType->getName().find(secureContainerTypeName) != std::string::npos;
+  bool lhs_is_secure_container =
+      lhsType->getName().find(secureContainerTypeName) != std::string::npos;
+  bool rhs_is_secure_container =
+      rhsType->getName().find(secureContainerTypeName) != std::string::npos;
 
   if (!lhs_is_secure_container and !rhs_is_secure_container)
     return;
@@ -987,17 +1230,16 @@ void ArithmeticsOptimizations::applyBeaverOptimizations(CallInstr *v) {
   if (isPow && !rhs_is_int)
     return;
 
-  std::string methodName =
-    isEq      ? "secure_eq"       :
-    isGt      ? "secure_gt"       :
-    isLt      ? "secure_lt"       :
-    isAdd     ? "secure_add"      :
-    isSub     ? "secure_sub"      :
-    isMul     ? "secure_mult"     :
-    isSqrtInv ? "secure_sqrt_inv" :
-    isDiv     ? "secure_div"      :
-    isPow     ? "secure_pow"      :
-    "invalid_operation";
+  std::string methodName = isEq        ? "secure_eq"
+                           : isGt      ? "secure_gt"
+                           : isLt      ? "secure_lt"
+                           : isAdd     ? "secure_add"
+                           : isSub     ? "secure_sub"
+                           : isMul     ? "secure_mult"
+                           : isSqrtInv ? "secure_sqrt_inv"
+                           : isDiv     ? "secure_div"
+                           : isPow     ? "secure_pow"
+                                       : "invalid_operation";
   if (!isBeaverOptFunc(pf) && (isMul || isPow || isSqrtInv))
     methodName += "_no_cache";
 
@@ -1006,10 +1248,8 @@ void ArithmeticsOptimizations::applyBeaverOptimizations(CallInstr *v) {
     rhsType = rhs->getType();
   }
 
-  auto *sequreInternalType = M->getOrRealizeType("Internal", {}, "std.sequre.stdlib.internal");
   auto *method =
-      M->getOrRealizeMethod(sequreInternalType, methodName, {selfType, lhsType, rhsType});
-  
+      getOrRealizeSequreInternalMethod(M, methodName, {selfType, lhsType, rhsType});
   if (!method)
     return;
 
